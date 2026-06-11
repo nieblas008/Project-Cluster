@@ -1,0 +1,44 @@
+name: CI — App & Packages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# macOS runner minutes bill at 10× — keep this job lean.
+jobs:
+  packages-and-app:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode on the runner
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)/Contents/Developer"
+          xcodebuild -version
+          swift --version
+
+      - name: Lint (swift-format)
+        run: swift format lint --strict --recursive Packages Relay "Project Cluster"
+
+      - name: Test ClusterProtocol
+        run: swift test --package-path Packages/ClusterProtocol
+
+      - name: Test ClusterNet
+        run: swift test --package-path Packages/ClusterNet
+
+      - name: Test ClusterServer
+        run: swift test --package-path Packages/ClusterServer
+
+      - name: Test ClusterVoice
+        run: swift test --package-path Packages/ClusterVoice
+
+      - name: Build app (unsigned)
+        run: >
+          xcodebuild
+          -scheme "Project Cluster"
+          -configuration Debug
+          -destination "platform=macOS"
+          build
+          CODE_SIGNING_ALLOWED=NO

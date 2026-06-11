@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+*.xcarchive
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Release artifacts
+dist/
+
+# Secrets — never commit App Store Connect keys or certs
+*.p8
+*.p12
+*.cer
+*.mobileprovision
+*.provisionprofile
+
+# Claude Code local settings
+.claude/settings.local.json

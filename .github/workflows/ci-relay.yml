@@ -1,0 +1,21 @@
+name: CI — Relay (Linux)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  relay-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: swift:6.1-jammy
+    steps:
+      - uses: actions/checkout@v4
+
+      # Proves the relay builds and passes tests on its production platform.
+      - name: Test Relay
+        run: swift test --package-path Relay
+
+      - name: Build release binary
+        run: swift build --package-path Relay -c release --product cluster-relayd

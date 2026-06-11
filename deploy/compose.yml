@@ -1,0 +1,12 @@
+# Runs on the relay VPS. From the repo root:
+#   docker compose -f deploy/compose.yml up -d --build
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: Relay/Dockerfile
+    container_name: cluster-relayd
+    restart: unless-stopped
+    ports:
+      - "7600:7600/tcp"
+      - "7601:7601/udp"

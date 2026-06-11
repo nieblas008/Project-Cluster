@@ -1,2 +1,41 @@
-# Project-Cluster
-My own little version of the popular gather.io website so I can use this with my cool coworkers.
+# Project Cluster
+
+My own little version of Gather so I can use it with my cool coworkers — a native macOS app,
+written in Swift: a 2D mansion where the team walks around as avatars, talks over proximity voice
+chat, personalizes desks, and races go-karts. One member **hosts** the session on their own Mac —
+the world's data lives there — and everyone else **joins with a short code** through a tiny
+stateless relay.
+
+**The full design and phase-by-phase roadmap live in [docs/PLAN.md](docs/PLAN.md).**
+
+## Layout
+
+| Path | What |
+|---|---|
+| `Project Cluster/` + `Project Cluster.xcodeproj` | The app (SwiftUI shell, later SpriteKit world) |
+| `Packages/ClusterProtocol` | Shared core: wire codec, sim math, tuning — platform-free |
+| `Packages/ClusterNet` | Identity (Keychain), later relay client + QUIC transport |
+| `Packages/ClusterServer` | Host role: world database (GRDB), later the 15 Hz sim |
+| `Packages/ClusterVoice` | Voice format, later capture/Opus/jitter/playback |
+| `Relay/` | `cluster-relayd` — stateless rendezvous + UDP relay (SwiftNIO, runs on Linux) |
+| `deploy/` | Relay compose file, TestFlight export options |
+| `docs/` | Plan, runbooks, ADRs |
+
+## Development
+
+```sh
+# App: open in Xcode and run, or:
+xcodebuild -scheme "Project Cluster" -destination "platform=macOS" build
+
+# Package tests:
+swift test --package-path Packages/ClusterProtocol   # (likewise ClusterNet/Server/Voice)
+
+# Relay, locally:
+swift run --package-path Relay cluster-relayd
+# then: nc localhost 7600 → type PING → expect PONG
+
+# Lint:
+swift format lint --strict --recursive Packages Relay "Project Cluster"
+```
+
+Releases go to the team via TestFlight: see [docs/runbooks/release.md](docs/runbooks/release.md).
