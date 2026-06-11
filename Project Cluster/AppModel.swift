@@ -3,8 +3,8 @@ import ClusterServer
 import Foundation
 import Observation
 
-/// App-level state: the device identity, the current screen, and the Phase 0
-/// host-world bootstrap. Networking state joins in Phase 1.
+/// App-level state: identity, profile, relay configuration, current screen,
+/// and the live host/join lobby models.
 @MainActor
 @Observable
 final class AppModel {
@@ -19,17 +19,60 @@ final class AppModel {
     private(set) var identity: PlayerIdentity?
     private(set) var identityError: String?
 
+    static let avatarPresets = ["default", "sky", "mint", "coral", "violet"]
+
     var displayName: String {
         didSet { UserDefaults.standard.set(displayName, forKey: "displayName") }
     }
+    var avatarPreset: String {
+        didSet { UserDefaults.standard.set(avatarPreset, forKey: "avatarPreset") }
+    }
 
-    // MARK: Host-world bootstrap (Phase 0 scope)
+    // MARK: Relay configuration (Settings)
 
-    private(set) var worldSummary: [String] = []
-    private(set) var worldError: String?
+    var relayHost: String {
+        didSet { UserDefaults.standard.set(relayHost, forKey: "relayHost") }
+    }
+    var relayControlPort: String {
+        didSet { UserDefaults.standard.set(relayControlPort, forKey: "relayControlPort") }
+    }
+    var relayUDPPort: String {
+        didSet { UserDefaults.standard.set(relayUDPPort, forKey: "relayUDPPort") }
+    }
+    var relayFingerprint: String {
+        didSet { UserDefaults.standard.set(relayFingerprint, forKey: "relayFingerprint") }
+    }
+
+    var relayEndpoint: RelayEndpoint {
+        RelayEndpoint(
+            host: relayHost.trimmingCharacters(in: .whitespaces),
+            controlPort: UInt16(relayControlPort) ?? 7600,
+            udpPort: UInt16(relayUDPPort) ?? 7601,
+            certFingerprint: relayFingerprint
+        )
+    }
+
+    var showSettings = false
+    private(set) var doctorChecks: [DoctorCheck] = []
+    private(set) var doctorRunning = false
+
+    // MARK: Lobby models
+
+    let hostLobby = HostLobbyModel()
+    let joinLobby = JoinLobbyModel()
+
+    var hasUsableProfile: Bool {
+        identity != nil && !displayName.trimmingCharacters(in: .whitespaces).isEmpty
+    }
 
     init(secretStore: SecretStore = KeychainSecretStore()) {
-        self.displayName = UserDefaults.standard.string(forKey: "displayName") ?? ""
+        let defaults = UserDefaults.standard
+        self.displayName = defaults.string(forKey: "displayName") ?? ""
+        self.avatarPreset = defaults.string(forKey: "avatarPreset") ?? "default"
+        self.relayHost = defaults.string(forKey: "relayHost") ?? ""
+        self.relayControlPort = defaults.string(forKey: "relayControlPort") ?? "7600"
+        self.relayUDPPort = defaults.string(forKey: "relayUDPPort") ?? "7601"
+        self.relayFingerprint = defaults.string(forKey: "relayFingerprint") ?? ""
         do {
             self.identity = try IdentityManager.loadOrCreate(store: secretStore)
         } catch {
@@ -37,28 +80,14 @@ final class AppModel {
         }
     }
 
-    var hasUsableProfile: Bool {
-        identity != nil && !displayName.trimmingCharacters(in: .whitespaces).isEmpty
-    }
-
-    /// Creates (or opens) the world database and surfaces what's inside it —
-    /// the Phase 0 proof that hosting stores everything on this Mac.
-    func prepareWorld() {
-        worldError = nil
-        worldSummary = []
-        do {
-            let url = try WorldDatabase.defaultFileURL()
-            let db = try WorldDatabase(fileURL: url)
-            let space = try db.ensureSpace(named: "The Mansion")
-            let players = try db.playerCount()
-            worldSummary = [
-                "Space: \(space.name)",
-                "Invite secret: \(space.inviteSecret)",
-                "Known players: \(players)",
-                "Stored at: \(url.path)",
-            ]
-        } catch {
-            worldError = "World storage failed: \(error)"
+    func runDoctor() {
+        doctorRunning = true
+        doctorChecks = []
+        let endpoint = relayEndpoint
+        Task {
+            let checks = await ConnectivityDoctor.run(endpoint: endpoint)
+            self.doctorChecks = checks
+            self.doctorRunning = false
         }
     }
 }

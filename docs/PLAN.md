@@ -45,7 +45,8 @@ session codes become short (6 chars) again, and no domain is needed. Everything 
 6. Desk personalization
 7. **Go-karts** 🏎️
 
-**Assumption to confirm with the team:** everyone has a Mac (iOS later; Windows never).
+**Confirmed (2026-06-11):** the whole team uses Macs (work machines) — the app is macOS-exclusive
+(iOS later; Windows never).
 
 ---
 
@@ -67,8 +68,8 @@ session codes become short (6 chars) again, and no domain is needed. Everything 
                     │ · knock approval       │      │   playback        │
                     └────────────────────────┘      └───────────────────┘
 
-         QUIC runs END-TO-END between host and each joiner; the relay forwards
-         opaque UDP packets and cannot decrypt anything.
+         Sessions are encrypted END-TO-END between host and each joiner (ADR 0001);
+         the relay splices/forwards opaque bytes and cannot decrypt anything.
 ```
 
 **How a session works:**
@@ -77,13 +78,14 @@ session codes become short (6 chars) again, and no domain is needed. Everything 
 2. A joiner sends the code up its own control connection; the relay introduces the two sides: it
    allocates a UDP flow for the pair and gives the joiner the host's session certificate fingerprint
    (captured at registration).
-3. Host and joiner then establish **QUIC end-to-end with each other** through the relay's UDP
-   forwarding — TLS 1.3 between the two apps, host cert pinned via the relayed fingerprint, invite
-   secret + knock approval (§6) gating entry. Streams carry reliable events (joins, desk edits,
-   status); datagrams carry movement snapshots and voice.
-4. The relay's data plane never parses QUIC. It's a per-pair UDP forwarder — TURN's shape without the
-   protocol baggage. This also sidesteps server-side Swift's QUIC immaturity entirely: the only QUIC
-   stacks in play are Apple's, inside the apps.
+3. Host and joiner then establish an **end-to-end encrypted tunnel with each other** through a relay
+   splice (ADR 0001): the relay pipes the two connections together, and an NK-pattern handshake
+   (CryptoKit X25519 → ChaChaPoly) runs between the apps — host key pinned via the relayed
+   fingerprint, invite secret + knock approval (§6) gating entry. The reliable plane carries events
+   (joins, desk edits, status); a sealed UDP datagram plane (Phase 2) carries movement and voice.
+4. The relay never holds session keys. Per-leg TLS protects against on-path attackers; the splice
+   pipes ciphertext it cannot open. Originally this was specced as QUIC-through-relay — ADR 0001
+   records why that's not buildable with Network.framework and what replaced it.
 
 **Why a custom ~small Swift relay is safe to build:** stateless, no database, no disk, one binary on
 one box; SwiftNIO's TCP/TLS and UDP channels are mature on Linux; the data plane is a routing table of
@@ -122,7 +124,7 @@ tolerance. A direct peer-to-peer fast path (hole punching, relay as fallback) is
 | UI | **SwiftUI** (+ AppKit escape hatches) | Host/join, lobby, roster, desk editor, settings, menu-bar host mode. iOS-portable |
 | Game rendering | **SpriteKit** via `SpriteView` | Tile maps, sprites, particles (skid marks!). iOS-portable |
 | Game simulation | **Pure Swift, shared package** | Deterministic movement/kart math + collision sampling — *not* SpriteKit physics — same code for host validation and client prediction |
-| App networking | **Network.framework** QUIC (`NWConnection`/`NWListener`) | End-to-end TLS 1.3 between apps; streams = reliable events, datagrams = movement + voice |
+| App networking | **Network.framework** (`NWConnection`) + CryptoKit tunnel (ADR 0001) | TLS to the relay (pinned); end-to-end NK handshake between apps; reliable frames = events, sealed datagrams (Phase 2) = movement + voice |
 | Relay | **SwiftNIO** on Linux: TLS control plane + UDP forwarding data plane | Stateless single binary in Docker; never parses QUIC; ~small codebase |
 | Relay hosting | **Hetzner CX22/CAX11 VPS** (~$4–5/mo, static IP, 20 TB) | No domain: app pins IP + cert fingerprint. (Oracle Cloud's always-free tier is a $0 alternative with reliability caveats) |
 | Identity & crypto | **CryptoKit** (Curve25519) + **Keychain** | Device keypair = identity; certs self-signed + pinned |
@@ -318,7 +320,7 @@ Say **"do Phase N"**; this document is the spec.
 | Phase | Work order | Definition of done |
 |---|---|---|
 | **0 — Foundation** | Xcode project + four SPM packages + relay executable skeleton; SwiftUI shell (Host/Join stubbed); identity keypair + Keychain; GRDB + first migration; CI (macOS app job, Linux relay job); release script (sign → notarize → TestFlight) + runbook. *Needs from you: Apple Developer Program ($99/yr); all-Mac confirmation.* | Signed, notarized build installs on a teammate's Mac via TestFlight; both CI jobs green |
-| **1 — Relay, host & join** | `cluster-relayd` (control plane: register/lookup/introduce; data plane: UDP flow forwarding); provision VPS + Docker deploy workflow + relay runbook; app pins relay IP + cert; session codes; QUIC end-to-end handshake (secret, identity, profile, knock/approve); lobby roster; clean disconnects; **Connectivity Doctor** (relay reachability, UDP-blocked detection) — **run from your work WiFi on day one**; if UDP is blocked there, build the TCP-443 fallback in this phase. *Needs from you: Hetzner account (~$5/mo); 30 min on work WiFi for the reachability test.* | You host from work WiFi; a coworker on another network joins with a 6-char code; both lobbies show the roster; Doctor explains any failure in plain language |
+| **1 — Relay, host & join** | `cluster-relayd` (control plane: register/lookup/introduce over TLS; data plane: pair splicing — UDP flows land in Phase 2 per ADR 0001); provision VPS + Docker deploy workflow + relay runbook; app pins relay IP + cert; session codes; end-to-end tunnel handshake (secret, identity, profile, knock/approve); lobby roster; clean disconnects; **Connectivity Doctor** (relay reachability, UDP-blocked detection) — **run from your work WiFi on day one**; if UDP is blocked there, build the TCP-443 fallback in this phase. *Needs from you: Hetzner account (~$5/mo); 30 min on work WiFi for the reachability test.* | You host from work WiFi; a coworker on another network joins with a 6-char code; both lobbies show the roster; Doctor explains any failure in plain language |
 | **2 — Walkable mansion** | Licensed art + `LICENSES.md`; mansion map + Tiled importer; SpriteKit `WorldScene`; 15 Hz sim; prediction + validation + interpolation (§7); nameplates; camera; graceful host-quit and rejoin | Three Macs on different networks walk the mansion smoothly; killing the host app gives clients a clean "session ended"; rehosting lets them rejoin |
 | **3 — Voice** *(allowed two prompts)* | `ClusterVoice` per §8: voice-processed capture, Opus, datagrams via relay, host proximity fan-out, jitter buffer + PLC, proximity volume, mute/PTT, device picker, speaking rings | Full-team meeting in-app, echo-free on laptop speakers, including one member on bad hotel wifi |
 | **4 — Status & presence** | Roster sidebar; presence + `last_seen_at`; available/focus/DND with badges, hotkey, persistence; DND voice behavior; auto-away (§9) | A teammate opens the app and knows in 5 seconds who's around and who's interruptible |

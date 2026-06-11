@@ -28,14 +28,18 @@ stateless relay.
 xcodebuild -scheme "Project Cluster" -destination "platform=macOS" build
 
 # Package tests:
-swift test --package-path Packages/ClusterProtocol   # (likewise ClusterNet/Server/Voice)
+swift test --package-path Packages/ClusterProtocol   # (likewise ClusterNet/Server/Voice, Relay)
 
-# Relay, locally:
-swift run --package-path Relay cluster-relayd
-# then: nc localhost 7600 → type PING → expect PONG
+# Local relay (prints the fingerprint to paste into the app's Settings,
+# address 127.0.0.1) — then run two app instances and host/join for real:
+scripts/dev-relay.sh
+
+# Full end-to-end check (relay + host + joiner, the CI smoke):
+scripts/itest-phase1.sh
 
 # Lint:
 swift format lint --strict --recursive Packages Relay "Project Cluster"
 ```
 
+Relay VPS setup + operations: [docs/runbooks/relay.md](docs/runbooks/relay.md).
 Releases go to the team via TestFlight: see [docs/runbooks/release.md](docs/runbooks/release.md).

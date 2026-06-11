@@ -42,3 +42,8 @@ jobs:
           -destination "platform=macOS"
           build
           CODE_SIGNING_ALLOWED=NO
+
+      # Boots a real relay (TLS) and runs host + joiner through code → splice
+      # → handshake → roster. The Phase 1 exit criterion, minus the internet.
+      - name: End-to-end smoke (relay + host + joiner)
+        run: scripts/itest-phase1.sh

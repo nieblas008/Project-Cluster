@@ -16,6 +16,9 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 760, minHeight: 520)
+        .sheet(isPresented: $model.showSettings) {
+            SettingsView(model: model)
+        }
     }
 }
 
@@ -25,6 +28,17 @@ struct WelcomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button {
+                    model.showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless)
+                .help("Relay settings & Connectivity Doctor")
+            }
+
             Spacer()
 
             VStack(spacing: 8) {
@@ -44,6 +58,17 @@ struct WelcomeView: View {
                     .controlSize(.large)
                     .frame(maxWidth: 320)
                     .focused($nameFocused)
+
+                Picker("Avatar", selection: $model.avatarPreset) {
+                    ForEach(AppModel.avatarPresets, id: \.self) { preset in
+                        Image(systemName: "person.crop.circle.fill")
+                            .foregroundStyle(AvatarPalette.color(for: preset))
+                            .tag(preset)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 320)
 
                 HStack(spacing: 16) {
                     Button {
@@ -72,13 +97,13 @@ struct WelcomeView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(.top, 36)
+            .padding(.top, 32)
 
             Spacer()
 
             footer
         }
-        .padding(32)
+        .padding(24)
         .onAppear { nameFocused = model.displayName.isEmpty }
     }
 
@@ -89,7 +114,8 @@ struct WelcomeView: View {
                 .font(.footnote.monospaced())
                 .foregroundStyle(.tertiary)
                 .help(
-                    "Your identity is a keypair in the Keychain — no account, no password. Player ID: \(identity.playerID)"
+                    "Your identity is a keypair in the Keychain — no account, no password. "
+                        + "Player ID: \(identity.playerID)"
                 )
         } else if let error = model.identityError {
             Label(error, systemImage: "exclamationmark.triangle.fill")
