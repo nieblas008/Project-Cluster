@@ -25,13 +25,15 @@ public final class ControlHandler: ChannelInboundHandler, RemovableChannelHandle
     static let pairTimeout = TimeAmount.seconds(30)
 
     private let registry: SessionRegistry
+    private let flows: FlowTable
     private let logger: Logger
     private var assembler = FrameAssembler()
     private var phase = Phase.awaitingHello
     private var parkTimeout: Scheduled<Void>?
 
-    public init(registry: SessionRegistry, logger: Logger) {
+    public init(registry: SessionRegistry, flows: FlowTable, logger: Logger) {
         self.registry = registry
+        self.flows = flows
         self.logger = logger
     }
 
@@ -110,6 +112,10 @@ public final class ControlHandler: ChannelInboundHandler, RemovableChannelHandle
                 return
             }
             logger.info("splicing pair=\(pairID)")
+            // Hand each side its UDP flow credentials, then go transparent.
+            let flow = flows.createFlow()
+            Self.send(.dataPlane(flowID: flow.flowID, token: flow.hostToken), to: context.channel)
+            Self.send(.dataPlane(flowID: flow.flowID, token: flow.joinerToken), to: pair.joinerChannel)
             splice(hostLeg: context, joinerChannel: pair.joinerChannel)
 
         case (.probing, _), (.hostRegistered, _), (.joinerParked, _):

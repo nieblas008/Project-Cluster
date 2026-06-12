@@ -1,4 +1,5 @@
 import ClusterNet
+import ClusterProtocol
 import ClusterServer
 import Foundation
 import Observation
@@ -52,6 +53,16 @@ final class AppModel {
         )
     }
 
+    /// "auto" (probe UDP, fall back) or "tcp" (compatibility) — ADR 0002.
+    var transportMode: String {
+        didSet { UserDefaults.standard.set(transportMode, forKey: "transportMode") }
+    }
+    var preferUDP: Bool { transportMode != "tcp" }
+
+    /// The bundled mansion, loaded once.
+    private(set) var worldMap: WorldMap?
+    private(set) var worldMapError: String?
+
     var showSettings = false
     private(set) var doctorChecks: [DoctorCheck] = []
     private(set) var doctorRunning = false
@@ -73,6 +84,16 @@ final class AppModel {
         self.relayControlPort = defaults.string(forKey: "relayControlPort") ?? "7600"
         self.relayUDPPort = defaults.string(forKey: "relayUDPPort") ?? "7601"
         self.relayFingerprint = defaults.string(forKey: "relayFingerprint") ?? ""
+        self.transportMode = defaults.string(forKey: "transportMode") ?? "auto"
+        if let url = Bundle.main.url(forResource: "mansion", withExtension: "json") {
+            do {
+                self.worldMap = try TiledMapLoader.load(data: try Data(contentsOf: url))
+            } catch {
+                self.worldMapError = "Bundled map failed to load: \(error)"
+            }
+        } else {
+            self.worldMapError = "mansion.json missing from the app bundle"
+        }
         do {
             self.identity = try IdentityManager.loadOrCreate(store: secretStore)
         } catch {

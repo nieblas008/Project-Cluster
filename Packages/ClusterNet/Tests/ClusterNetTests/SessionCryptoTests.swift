@@ -28,6 +28,31 @@ import Testing
         var joinerReceive = SecureChannelCipher(key: joinerKeys.receiveKey)
         let sealedBack = try hostSend.seal([0x01, 0x02])
         #expect(try joinerReceive.open(sealedBack) == [0x01, 0x02])
+
+        // Datagram keys cross-match too (ADR 0002).
+        var joinerUDP = DatagramCipher(key: joinerKeys.datagramSendKey, flowID: 7)
+        var hostUDP = DatagramCipher(key: hostKeys.datagramReceiveKey, flowID: 7)
+        let (seq, sealedDatagram) = try joinerUDP.seal([0xFE])
+        #expect(hostUDP.open(seq: seq, ciphertext: sealedDatagram) == [0xFE])
+    }
+
+    @Test func datagramCipherDropsReplaysStaleAndCrossFlow() throws {
+        let key = SymmetricKey(size: .bits256)
+        var sender = DatagramCipher(key: key, flowID: 3)
+        var receiver = DatagramCipher(key: key, flowID: 3)
+
+        let (seq1, packet1) = try sender.seal([1])
+        let (seq2, packet2) = try sender.seal([2])
+        // Out of order: newest first wins, the straggler drops.
+        #expect(receiver.open(seq: seq2, ciphertext: packet2) == [2])
+        #expect(receiver.open(seq: seq1, ciphertext: packet1) == nil)
+        // Replay of the accepted one also drops.
+        #expect(receiver.open(seq: seq2, ciphertext: packet2) == nil)
+
+        // Same key, wrong flow AAD: refuses.
+        var wrongFlow = DatagramCipher(key: key, flowID: 4)
+        let (seq3, packet3) = try sender.seal([3])
+        #expect(wrongFlow.open(seq: seq3, ciphertext: packet3) == nil)
     }
 
     @Test func wrongFingerprintRefusesToEvenStart() {

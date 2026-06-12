@@ -26,14 +26,20 @@ public enum SessionMessage: Equatable, Sendable {
     case joinHello(
         identityKey: Data, displayName: String, avatarPreset: String,
         inviteSecret: String, signature: Data)
-    /// Host: you're in. Roster follows and stays updated.
-    case welcome(spaceName: String, roster: [RosterEntry])
+    /// Host: you're in. Carries the map version (joiner verifies its bundled
+    /// map matches) and the host's transport policy (ADR 0002).
+    case welcome(spaceName: String, mapVersion: String, hostAllowsUDP: Bool, roster: [RosterEntry])
     /// Host: first-time identity — a human is looking at an approve dialog.
     case knockPending
     case denied(reason: String)
     case rosterUpdate(roster: [RosterEntry])
     /// Either side: clean goodbye before closing.
     case leave
+    /// World traffic over the tunnel — the TCP fallback road (ADR 0002).
+    /// Payload is an encoded `WorldPayload`.
+    case worldFrame(payload: Data)
+    /// Joiner → host after probing its UDP path: which road to use for me.
+    case transportSelected(useUDP: Bool)
 
     private enum Kind: UInt8 {
         case joinHello = 1
@@ -42,6 +48,8 @@ public enum SessionMessage: Equatable, Sendable {
         case denied = 4
         case rosterUpdate = 5
         case leave = 6
+        case worldFrame = 7
+        case transportSelected = 8
     }
 
     public func encoded() throws -> [UInt8] {
@@ -54,9 +62,11 @@ public enum SessionMessage: Equatable, Sendable {
             try w.write(avatarPreset)
             try w.write(inviteSecret)
             try w.write(signature)
-        case .welcome(let spaceName, let roster):
+        case .welcome(let spaceName, let mapVersion, let hostAllowsUDP, let roster):
             w.write(Kind.welcome.rawValue)
             try w.write(spaceName)
+            try w.write(mapVersion)
+            w.write(hostAllowsUDP)
             try Self.write(roster: roster, to: &w)
         case .knockPending:
             w.write(Kind.knockPending.rawValue)
@@ -68,6 +78,12 @@ public enum SessionMessage: Equatable, Sendable {
             try Self.write(roster: roster, to: &w)
         case .leave:
             w.write(Kind.leave.rawValue)
+        case .worldFrame(let payload):
+            w.write(Kind.worldFrame.rawValue)
+            try w.write(payload)
+        case .transportSelected(let useUDP):
+            w.write(Kind.transportSelected.rawValue)
+            w.write(useUDP)
         }
         return w.bytes
     }
@@ -85,7 +101,11 @@ public enum SessionMessage: Equatable, Sendable {
                 signature: try r.readData()
             )
         case .welcome:
-            self = .welcome(spaceName: try r.readString(), roster: try Self.readRoster(from: &r))
+            self = .welcome(
+                spaceName: try r.readString(),
+                mapVersion: try r.readString(),
+                hostAllowsUDP: try r.readBool(),
+                roster: try Self.readRoster(from: &r))
         case .knockPending:
             self = .knockPending
         case .denied:
@@ -94,6 +114,10 @@ public enum SessionMessage: Equatable, Sendable {
             self = .rosterUpdate(roster: try Self.readRoster(from: &r))
         case .leave:
             self = .leave
+        case .worldFrame:
+            self = .worldFrame(payload: try r.readData())
+        case .transportSelected:
+            self = .transportSelected(useUDP: try r.readBool())
         }
     }
 

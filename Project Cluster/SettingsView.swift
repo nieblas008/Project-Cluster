@@ -20,6 +20,19 @@ struct SettingsView: View {
                         .font(.caption.monospaced())
                 }
 
+                Section("Connection") {
+                    Picker("Transport", selection: $model.transportMode) {
+                        Text("Automatic (recommended)").tag("auto")
+                        Text("TCP only (compatibility)").tag("tcp")
+                    }
+                    Text(
+                        "Automatic probes the fast UDP road and falls back by itself. "
+                            + "Pick TCP only if your network blocks UDP and you want to skip the probe."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
                 Section {
                     HStack {
                         Button("Run Connectivity Doctor") {

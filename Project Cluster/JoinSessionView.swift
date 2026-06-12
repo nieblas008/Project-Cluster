@@ -1,4 +1,5 @@
 import ClusterNet
+import ClusterProtocol
 import SwiftUI
 
 struct JoinSessionView: View {
@@ -8,6 +9,14 @@ struct JoinSessionView: View {
     private var lobby: JoinLobbyModel { model.joinLobby }
 
     var body: some View {
+        if case .joined = lobby.state {
+            WorldView(mode: .join, model: model)
+        } else {
+            lobbyBody
+        }
+    }
+
+    private var lobbyBody: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
                 Button {
@@ -39,14 +48,8 @@ struct JoinSessionView: View {
                         .foregroundStyle(.secondary)
                     Button("Cancel") { lobby.leave() }
                 }
-            case .joined(let spaceName):
-                VStack(alignment: .leading, spacing: 16) {
-                    Label("Welcome to \(spaceName)", systemImage: "checkmark.seal.fill")
-                        .font(.title2)
-                        .foregroundStyle(.green)
-                    RosterListView(roster: lobby.roster, selfID: model.identity?.playerID)
-                    Button("Leave", role: .destructive) { lobby.leave() }
-                }
+            case .joined:
+                Color.clear.frame(height: 0)
             case .denied(let reason):
                 VStack(alignment: .leading, spacing: 8) {
                     Label(reason, systemImage: "xmark.octagon.fill")
@@ -86,10 +89,11 @@ struct JoinSessionView: View {
     }
 
     private func join() {
-        guard let identity = model.identity else { return }
+        guard let identity = model.identity, let map = model.worldMap else { return }
         lobby.join(
             code: sessionCode, endpoint: model.relayEndpoint, identity: identity,
-            displayName: model.displayName, avatarPreset: model.avatarPreset)
+            displayName: model.displayName, avatarPreset: model.avatarPreset,
+            mapHash: map.contentHash, preferUDP: model.preferUDP)
     }
 }
 

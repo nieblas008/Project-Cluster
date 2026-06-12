@@ -34,8 +34,12 @@ swift test --package-path Packages/ClusterProtocol   # (likewise ClusterNet/Serv
 # address 127.0.0.1) — then run two app instances and host/join for real:
 scripts/dev-relay.sh
 
-# Full end-to-end check (relay + host + joiner, the CI smoke):
+# Full end-to-end check (relay + host + joiner + walking, both transports):
 scripts/itest-phase1.sh
+
+# Regenerate art / the mansion map (outputs land in "Project Cluster/Resources"):
+swift scripts/generate-assets.swift
+swift scripts/generate-mansion.swift
 
 # Lint:
 swift format lint --strict --recursive Packages Relay "Project Cluster"

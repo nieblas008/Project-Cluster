@@ -38,6 +38,16 @@ public struct ByteWriter: Sendable {
         write(value.bitPattern)
     }
 
+    /// Float32 — positions on the wire don't need Double precision and the
+    /// snapshot fan-out pays for every byte 15 times a second.
+    public mutating func write(_ value: Float) {
+        write(value.bitPattern)
+    }
+
+    public mutating func write(_ value: Int8) {
+        write(UInt8(bitPattern: value))
+    }
+
     public mutating func write(_ value: Bool) {
         write(UInt8(value ? 1 : 0))
     }
@@ -53,6 +63,11 @@ public struct ByteWriter: Sendable {
         guard utf8.count <= Int(UInt16.max) else { throw CodecError.invalidValue }
         write(UInt16(utf8.count))
         bytes.append(contentsOf: utf8)
+    }
+
+    /// Raw bytes, no prefix — for fixed-layout packets (datagram headers).
+    public mutating func writeRaw(_ raw: [UInt8]) {
+        bytes.append(contentsOf: raw)
     }
 
     /// Raw bytes with a UInt16 length prefix (keys, signatures, fingerprints).
@@ -115,6 +130,14 @@ public struct ByteReader: Sendable {
 
     public mutating func readDouble() throws -> Double {
         Double(bitPattern: try readUInt64())
+    }
+
+    public mutating func readFloat() throws -> Float {
+        Float(bitPattern: try readUInt32())
+    }
+
+    public mutating func readInt8() throws -> Int8 {
+        Int8(bitPattern: try readUInt8())
     }
 
     public mutating func readBool() throws -> Bool {

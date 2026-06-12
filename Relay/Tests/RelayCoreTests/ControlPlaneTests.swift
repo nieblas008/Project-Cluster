@@ -12,12 +12,13 @@ import Testing
 private struct Harness {
     let loop = EmbeddedEventLoop()
     let registry = SessionRegistry()
+    let flows = FlowTable()
     let logger = Logger(label: "test")
 
     func makeChannel() throws -> EmbeddedChannel {
         let channel = EmbeddedChannel(loop: loop)
         try channel.pipeline.syncOperations.addHandler(
-            ControlHandler(registry: registry, logger: logger))
+            ControlHandler(registry: registry, flows: flows, logger: logger))
         return channel
     }
 
@@ -148,8 +149,18 @@ private struct Harness {
         try harness.send(.clientHello(wireVersion: ProtocolInfo.wireVersion, role: .attach), to: attach)
         try harness.send(.attach(pairID: pairID), to: attach)
 
-        #expect(try harness.drainMessages(from: attach) == [.spliceBegin])
-        #expect(try harness.drainMessages(from: joiner) == [.spliceBegin])
+        let attachMessages = try harness.drainMessages(from: attach)
+        let joinerSpliceMessages = try harness.drainMessages(from: joiner)
+        guard case .dataPlane(let hostFlow, let hostToken) = attachMessages.first,
+            case .dataPlane(let joinerFlow, let joinerToken) = joinerSpliceMessages.first
+        else {
+            Issue.record("expected dataPlane first: \(attachMessages) / \(joinerSpliceMessages)")
+            return
+        }
+        #expect(hostFlow == joinerFlow)
+        #expect(hostToken != joinerToken)
+        #expect(attachMessages.last == .spliceBegin)
+        #expect(joinerSpliceMessages.last == .spliceBegin)
 
         // Raw bytes now flow attach → joiner…
         var msg1 = attach.allocator.buffer(capacity: 8)

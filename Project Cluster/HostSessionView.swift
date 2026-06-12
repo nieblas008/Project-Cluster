@@ -8,6 +8,14 @@ struct HostSessionView: View {
     private var lobby: HostLobbyModel { model.hostLobby }
 
     var body: some View {
+        if lobby.inWorld {
+            WorldView(mode: .host, model: model)
+        } else {
+            lobbyBody
+        }
+    }
+
+    private var lobbyBody: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
                 Button {
@@ -59,13 +67,19 @@ struct HostSessionView: View {
             )
             .foregroundStyle(.secondary)
             Button("Start Hosting") {
-                guard let identity = model.identity else { return }
+                guard let identity = model.identity, let map = model.worldMap else { return }
                 lobby.start(
                     endpoint: model.relayEndpoint, identity: identity,
-                    displayName: model.displayName, avatarPreset: model.avatarPreset)
+                    displayName: model.displayName, avatarPreset: model.avatarPreset,
+                    map: map, allowUDP: model.preferUDP)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.extraLarge)
+            .disabled(model.worldMap == nil)
+            if let mapError = model.worldMapError {
+                Label(mapError, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+            }
         }
     }
 
@@ -109,6 +123,15 @@ struct HostSessionView: View {
                 .padding(4)
             }
         }
+
+        Button {
+            lobby.inWorld = true
+        } label: {
+            Label("Enter the Mansion", systemImage: "figure.walk")
+                .frame(maxWidth: 280)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.extraLarge)
 
         RosterListView(roster: lobby.roster, selfID: model.identity?.playerID)
 

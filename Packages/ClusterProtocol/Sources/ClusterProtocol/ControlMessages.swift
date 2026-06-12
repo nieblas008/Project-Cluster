@@ -27,6 +27,9 @@ public enum ControlMessage: Equatable, Sendable {
     /// connection for this pair.
     case incomingPair(pairID: UInt32)
     case attach(pairID: UInt32)
+    /// Relay → each leg of a pair right before spliceBegin: your UDP flow id
+    /// and the bind token for your side (ADR 0002).
+    case dataPlane(flowID: UInt32, token: UInt64)
     /// Relay → both legs of a pair: framing stops belonging to the relay after
     /// this message; the next bytes flow end-to-end.
     case spliceBegin
@@ -51,6 +54,7 @@ public enum ControlMessage: Equatable, Sendable {
         case ping = 11
         case pong = 12
         case error = 13
+        case dataPlane = 14
     }
 
     public func encoded() throws -> [UInt8] {
@@ -84,6 +88,10 @@ public enum ControlMessage: Equatable, Sendable {
         case .attach(let pairID):
             w.write(Kind.attach.rawValue)
             w.write(pairID)
+        case .dataPlane(let flowID, let token):
+            w.write(Kind.dataPlane.rawValue)
+            w.write(flowID)
+            w.write(token)
         case .spliceBegin:
             w.write(Kind.spliceBegin.rawValue)
         case .peerGone(let pairID):
@@ -130,6 +138,8 @@ public enum ControlMessage: Equatable, Sendable {
             self = .incomingPair(pairID: try r.readUInt32())
         case .attach:
             self = .attach(pairID: try r.readUInt32())
+        case .dataPlane:
+            self = .dataPlane(flowID: try r.readUInt32(), token: try r.readUInt64())
         case .spliceBegin:
             self = .spliceBegin
         case .peerGone:

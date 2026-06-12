@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# End-to-end Phase 1 check: real relay + host & joiner sessions in one
-# process. Exits 0 only if both sides see the two-person roster.
+# End-to-end check: real relay + host & joiner sessions. Runs the scenario
+# twice — once auto-negotiating UDP, once forced to the TCP fallback
+# (ADR 0002) — and both must walk.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 FP=$(scripts/relay-dev-cert.sh .dev/relay)
@@ -12,6 +13,12 @@ Relay/.build/debug/cluster-relayd \
 RELAY_PID=$!
 trap 'kill $RELAY_PID 2>/dev/null || true' EXIT
 sleep 1.5
-RELAY_HOST=127.0.0.1 RELAY_FINGERPRINT="$FP" \
-RELAY_CONTROL_PORT="${RELAY_CONTROL_PORT:-7600}" RELAY_UDP_PORT="${RELAY_UDP_PORT:-7601}" \
-    Packages/ClusterNet/.build/debug/cluster-smoke
+
+export RELAY_HOST=127.0.0.1 RELAY_FINGERPRINT="$FP"
+export RELAY_CONTROL_PORT="${RELAY_CONTROL_PORT:-7600}" RELAY_UDP_PORT="${RELAY_UDP_PORT:-7601}"
+
+echo "=== smoke 1/2: automatic transport (expects UDP) ==="
+Packages/ClusterNet/.build/debug/cluster-smoke
+
+echo "=== smoke 2/2: forced TCP fallback ==="
+CLUSTER_FORCE_TCP=1 Packages/ClusterNet/.build/debug/cluster-smoke

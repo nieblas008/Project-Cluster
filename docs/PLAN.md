@@ -92,7 +92,10 @@ one box; SwiftNIO's TCP/TLS and UDP channels are mature on Linux; the data plane
 `(flow id) → (two observed addresses)`. Off-the-shelf tunnels (e.g. frp) could substitute in a pinch —
 documented as the shortcut, not the plan.
 
-**Known caveat — UDP-hostile networks:** some corporate networks block outbound UDP entirely. Since the
+**UDP-hostile networks are a product feature, not just a caveat (ADR 0002):** the TCP fallback is
+built as a first-class transport with a user-facing toggle (Settings → Connection), negotiated per
+player — a future team behind any firewall can always select compatibility mode. Background: some
+corporate networks block outbound UDP entirely. Since the
 host will be on work WiFi, **Phase 1's first deliverable is a reachability self-test run from that
 exact network**. If UDP fails there, the relay grows a TCP-443 fallback mode (tunneling the datagrams
 over the existing TLS control connection — worse for voice latency, but functional) in the same phase
@@ -321,7 +324,7 @@ Say **"do Phase N"**; this document is the spec.
 |---|---|---|
 | **0 — Foundation** | Xcode project + four SPM packages + relay executable skeleton; SwiftUI shell (Host/Join stubbed); identity keypair + Keychain; GRDB + first migration; CI (macOS app job, Linux relay job); release script (sign → notarize → TestFlight) + runbook. *Needs from you: Apple Developer Program ($99/yr); all-Mac confirmation.* | Signed, notarized build installs on a teammate's Mac via TestFlight; both CI jobs green |
 | **1 — Relay, host & join** | `cluster-relayd` (control plane: register/lookup/introduce over TLS; data plane: pair splicing — UDP flows land in Phase 2 per ADR 0001); provision VPS + Docker deploy workflow + relay runbook; app pins relay IP + cert; session codes; end-to-end tunnel handshake (secret, identity, profile, knock/approve); lobby roster; clean disconnects; **Connectivity Doctor** (relay reachability, UDP-blocked detection) — **run from your work WiFi on day one**; if UDP is blocked there, build the TCP-443 fallback in this phase. *Needs from you: Hetzner account (~$5/mo); 30 min on work WiFi for the reachability test.* | You host from work WiFi; a coworker on another network joins with a 6-char code; both lobbies show the roster; Doctor explains any failure in plain language |
-| **2 — Walkable mansion** | Licensed art + `LICENSES.md`; mansion map + Tiled importer; SpriteKit `WorldScene`; 15 Hz sim; prediction + validation + interpolation (§7); nameplates; camera; graceful host-quit and rejoin | Three Macs on different networks walk the mansion smoothly; killing the host app gives clients a clean "session ended"; rehosting lets them rejoin |
+| **2 — Walkable mansion** | Art + `LICENSES.md`; mansion map (Tiled JSON) + Swift importer; SpriteKit `WorldScene`; 15 Hz sim; prediction + validation + interpolation (§7); nameplates; camera; graceful host-quit and rejoin; **relay UDP flows + sealed datagrams + per-player TCP fallback with a user-facing Automatic/TCP-only toggle in Settings → Connection (ADR 0002)** | Three Macs on different networks walk the mansion smoothly — including one forced to TCP-only; killing the host app gives clients a clean "session ended"; rehosting lets them rejoin |
 | **3 — Voice** *(allowed two prompts)* | `ClusterVoice` per §8: voice-processed capture, Opus, datagrams via relay, host proximity fan-out, jitter buffer + PLC, proximity volume, mute/PTT, device picker, speaking rings | Full-team meeting in-app, echo-free on laptop speakers, including one member on bad hotel wifi |
 | **4 — Status & presence** | Roster sidebar; presence + `last_seen_at`; available/focus/DND with badges, hotkey, persistence; DND voice behavior; auto-away (§9) | A teammate opens the app and knows in 5 seconds who's around and who's interruptible |
 | **5 — Desks** | Claim/release; catalog seed; SwiftUI palette + SpriteKit ghost/snap editor; host persistence + live broadcast (§10) | Every member decorates a desk; decorations survive host restarts and appear live to others |

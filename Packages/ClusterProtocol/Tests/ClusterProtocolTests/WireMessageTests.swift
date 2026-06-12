@@ -47,6 +47,7 @@ import Testing
         .incomingPair(pairID: 42),
         .attach(pairID: 42),
         .spliceBegin,
+        .dataPlane(flowID: 9, token: 0xAABB_CCDD_EEFF_0011),
         .peerGone(pairID: 7),
         .ping(nonce: 0xDEAD_BEEF),
         .pong(nonce: 0xDEAD_BEEF),
@@ -83,7 +84,8 @@ import Testing
             RosterEntry(playerID: "aa11", displayName: "Ricardo", avatarPreset: "default", isOnline: true),
             RosterEntry(playerID: "bb22", displayName: "Dana", avatarPreset: "kart-red", isOnline: false),
         ]
-        let welcome = SessionMessage.welcome(spaceName: "The Mansion", roster: roster)
+        let welcome = SessionMessage.welcome(
+            spaceName: "The Mansion", mapVersion: "abc123", hostAllowsUDP: true, roster: roster)
         #expect(try SessionMessage(decoding: welcome.encoded()) == welcome)
 
         let update = SessionMessage.rosterUpdate(roster: roster)
@@ -94,5 +96,12 @@ import Testing
         for message in [SessionMessage.knockPending, .leave, .denied(reason: "blocked")] {
             #expect(try SessionMessage(decoding: message.encoded()) == message)
         }
+    }
+
+    @Test func worldChannelMessagesRoundTrip() throws {
+        let frame = SessionMessage.worldFrame(payload: Data([1, 2, 3, 250]))
+        #expect(try SessionMessage(decoding: frame.encoded()) == frame)
+        let selected = SessionMessage.transportSelected(useUDP: false)
+        #expect(try SessionMessage(decoding: selected.encoded()) == selected)
     }
 }

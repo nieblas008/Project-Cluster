@@ -7,12 +7,15 @@ public enum HostSessionEvent: Sendable {
     /// A never-seen identity wants in; answer via `resolveKnock`.
     case knock(playerID: String, displayName: String)
     case rosterChanged([RosterEntry])
+    /// The 15 Hz world state — the host's own scene renders from this too.
+    case worldSnapshot(WorldSnapshot)
     case ended(reason: String)
 }
 
-/// The hosting side of Phase 1: registers with the relay, answers incoming
-/// pairs with an attach connection, runs the responder handshake, gates entry
-/// (signature → blocklist → knock), and owns the lobby roster.
+/// The hosting side: relay registration, attach connections, responder
+/// handshake, entry gating (Phase 1) — plus the authoritative world: spawn,
+/// input validation, 15 Hz snapshot fan-out over each member's chosen
+/// transport (Phase 2, ADR 0002).
 public actor HostSession {
     public nonisolated let events: AsyncStream<HostSessionEvent>
     private let eventsContinuation: AsyncStream<HostSessionEvent>.Continuation
@@ -23,6 +26,9 @@ public actor HostSession {
     private let spaceName: String
     private let hostDisplayName: String
     private let hostAvatarPreset: String
+    private let map: WorldMap
+    /// Session-wide policy from Settings → Connection (ADR 0002).
+    private let allowUDP: Bool
     private let sessionKey = HostSessionKey()
 
     private var control: FrameConnection?
@@ -32,8 +38,22 @@ public actor HostSession {
         var entry: RosterEntry
         var tunnel: FrameConnection
         var sendCipher: SecureChannelCipher
+        var datagram: DatagramChannel?
+        /// Set by the joiner's transportSelected; sending honors it only when
+        /// the host-side datagram channel actually bound.
+        var wantsUDP = false
     }
+
+    private struct WorldPlayer {
+        var position: Vec2
+        var facing: Facing = .down
+        var isMoving = false
+        var lastInputAt: ContinuousClock.Instant?
+    }
+
     private var members: [String: Member] = [:]
+    private var world: [String: WorldPlayer] = [:]
+    private var tick: UInt32 = 0
     private var knockDecisions: [String: CheckedContinuation<Bool, Never>] = [:]
     private var tasks: [Task<Void, Never>] = []
 
@@ -43,7 +63,9 @@ public actor HostSession {
         directory: any HostDirectory,
         spaceName: String,
         hostDisplayName: String,
-        hostAvatarPreset: String
+        hostAvatarPreset: String,
+        map: WorldMap,
+        allowUDP: Bool
     ) {
         self.endpoint = endpoint
         self.identity = identity
@@ -51,12 +73,15 @@ public actor HostSession {
         self.spaceName = spaceName
         self.hostDisplayName = hostDisplayName
         self.hostAvatarPreset = hostAvatarPreset
+        self.map = map
+        self.allowUDP = allowUDP
         (events, eventsContinuation) = AsyncStream.makeStream()
     }
 
     // MARK: Lifecycle
 
-    /// Connects, registers, and returns the session code.
+    /// Connects, registers, spawns the host avatar, starts the tick loop, and
+    /// returns the session code.
     @discardableResult
     public func start() async throws -> String {
         let control = FrameConnection(endpoint: endpoint)
@@ -73,19 +98,23 @@ public actor HostSession {
                 })
         }
         sessionCode = code
+        world[identity.playerID] = WorldPlayer(position: spawnPosition())
         eventsContinuation.yield(.registered(code: code))
         eventsContinuation.yield(.rosterChanged(currentRoster()))
         startPings(on: control)
+        startTickLoop()
         return code
     }
 
     public func stop() async {
         for task in tasks { task.cancel() }
         for member in members.values {
+            await member.datagram?.cancel()
             await member.tunnel.cancel()
         }
         await control?.cancel()
         members.removeAll()
+        world.removeAll()
         eventsContinuation.yield(.ended(reason: "Hosting stopped."))
         eventsContinuation.finish()
     }
@@ -93,6 +122,17 @@ public actor HostSession {
     /// UI's answer to a `.knock` event.
     public func resolveKnock(playerID: String, approve: Bool) {
         knockDecisions.removeValue(forKey: playerID)?.resume(returning: approve)
+    }
+
+    /// The host's own avatar, reported by its scene (~30 Hz). The host is the
+    /// authority; its own movement isn't validated, just published.
+    public func updateLocalPlayer(position: Vec2, facing: Facing, isMoving: Bool) {
+        world[identity.playerID] = WorldPlayer(
+            position: position, facing: facing, isMoving: isMoving, lastInputAt: nil)
+    }
+
+    private func spawnPosition() -> Vec2 {
+        map.spawnPoints.randomElement() ?? Vec2(x: 2, y: 2)
     }
 
     // MARK: Control loop
@@ -137,6 +177,64 @@ public actor HostSession {
             })
     }
 
+    // MARK: World tick (PLAN §7)
+
+    private func startTickLoop() {
+        tasks.append(
+            Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(66))  // ~15 Hz
+                    await self?.broadcastTick()
+                }
+            })
+    }
+
+    private func broadcastTick() async {
+        tick &+= 1
+        let players = world.map { id, player in
+            PlayerSnapshot(
+                id: PlayerWireID.prefix(fromHexID: id),
+                x: Float(player.position.x), y: Float(player.position.y),
+                facing: player.facing, isMoving: player.isMoving)
+        }
+        let snapshot = WorldSnapshot(tick: tick, players: players)
+        eventsContinuation.yield(.worldSnapshot(snapshot))
+
+        guard !members.isEmpty, let bytes = try? WorldPayload.snapshot(snapshot).encoded() else {
+            return
+        }
+        for (playerID, member) in members {
+            if member.wantsUDP, let datagram = member.datagram {
+                await datagram.send(bytes)
+            } else {
+                try? await sendMessage(.worldFrame(payload: Data(bytes)), to: playerID)
+            }
+        }
+    }
+
+    private func applyInput(playerID: String, frame: InputFrame) {
+        guard var player = world[playerID] else { return }
+        let now = ContinuousClock.now
+        let dt: Double
+        if let last = player.lastInputAt {
+            let elapsed = (now - last).components
+            dt = max(
+                Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18, 1.0 / 60)
+        } else {
+            dt = 1.0 / 15
+        }
+        player.position = MovementSim.validate(
+            previous: player.position,
+            proposed: Vec2(x: Double(frame.x), y: Double(frame.y)),
+            dt: dt,
+            collision: map.collision
+        )
+        player.facing = Facing.from(input: frame.input, previous: player.facing)
+        player.isMoving = frame.input.isMoving
+        player.lastInputAt = now
+        world[playerID] = player
+    }
+
     // MARK: Serving a joiner
 
     private func serveIncomingPair(pairID: UInt32) async {
@@ -148,9 +246,19 @@ public actor HostSession {
             try await tunnel.send(.attach(pairID: pairID))
 
             var frames = tunnel.incomingFrames.makeAsyncIterator()
-            guard let first = try await frames.next(),
-                case .spliceBegin = try ControlMessage(decoding: first)
-            else { throw ConnectionError.protocolViolation }
+
+            // Control tail: dataPlane (flow credentials), then spliceBegin.
+            var flowInfo: (flowID: UInt32, token: UInt64)?
+            preSplice: while let frame = try await frames.next() {
+                switch try ControlMessage(decoding: frame) {
+                case .dataPlane(let flowID, let token):
+                    flowInfo = (flowID, token)
+                case .spliceBegin:
+                    break preSplice
+                default:
+                    throw ConnectionError.protocolViolation
+                }
+            }
 
             // Responder handshake: one frame in, one frame out, keys ready.
             guard let message1 = try await frames.next() else { throw ConnectionError.closed }
@@ -218,12 +326,47 @@ public actor HostSession {
                 tunnel: tunnel,
                 sendCipher: sendCipher
             )
-            try await sendMessage(.welcome(spaceName: spaceName, roster: currentRoster()), to: playerID)
+            world[playerID] = WorldPlayer(position: spawnPosition())
+
+            // Host side of the datagram plane: bind regardless of the joiner's
+            // eventual choice — it's their call which road they use (ADR 0002).
+            if allowUDP, let flow = flowInfo {
+                let datagram = DatagramChannel(
+                    endpoint: endpoint, flowID: flow.flowID, token: flow.token,
+                    sendKey: keys.datagramSendKey, receiveKey: keys.datagramReceiveKey)
+                if await datagram.start() {
+                    members[playerID]?.datagram = datagram
+                    startDatagramReceive(from: datagram, playerID: playerID)
+                } else {
+                    await datagram.cancel()
+                }
+            }
+
+            try await sendMessage(
+                .welcome(
+                    spaceName: spaceName, mapVersion: map.contentHash,
+                    hostAllowsUDP: allowUDP, roster: currentRoster()),
+                to: playerID)
             await broadcastRoster()
 
-            // Stay on the line until they leave or drop.
+            // Stay on the line for tunnel traffic until they leave or drop.
             while let frame = try await frames.next() {
-                if case .leave = try SessionMessage(decoding: receiveCipher.open(frame)) {
+                switch try SessionMessage(decoding: receiveCipher.open(frame)) {
+                case .leave:
+                    await removeMember(playerID)
+                    return
+                case .worldFrame(let payload):
+                    if case .input(let input) = try? WorldPayload(decoding: [UInt8](payload)) {
+                        applyInput(playerID: playerID, frame: input)
+                    }
+                case .transportSelected(let useUDP):
+                    // Copy-modify-writeback: reading `members` inside a
+                    // subscript assignment overlaps exclusive access.
+                    if var member = members[playerID] {
+                        member.wantsUDP = useUDP && member.datagram != nil
+                        members[playerID] = member
+                    }
+                default:
                     break
                 }
             }
@@ -237,8 +380,21 @@ public actor HostSession {
         }
     }
 
+    private func startDatagramReceive(from datagram: DatagramChannel, playerID: String) {
+        tasks.append(
+            Task { [weak self] in
+                for await payload in datagram.incoming {
+                    if case .input(let input) = try? WorldPayload(decoding: payload) {
+                        await self?.applyInput(playerID: playerID, frame: input)
+                    }
+                }
+            })
+    }
+
     private func removeMember(_ playerID: String) async {
         guard let member = members.removeValue(forKey: playerID) else { return }
+        world.removeValue(forKey: playerID)
+        await member.datagram?.cancel()
         await member.tunnel.cancel()
         try? directory.markLeft(id: playerID)
         await broadcastRoster()

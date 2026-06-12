@@ -8,12 +8,16 @@ public enum JoinSessionEvent: Sendable {
     case knockPending
     case welcomed(spaceName: String, roster: [RosterEntry])
     case rosterChanged([RosterEntry])
+    /// Which road world traffic took after probing (ADR 0002) — for the UI badge.
+    case transport(usingUDP: Bool)
+    case worldSnapshot(WorldSnapshot)
     case denied(reason: String)
     case ended(reason: String)
 }
 
-/// The joining side: one connection that starts as control (code lookup) and
-/// becomes the end-to-end tunnel after the splice.
+/// The joining side: one connection that starts as control (code lookup),
+/// becomes the end-to-end tunnel after the splice, and — once welcomed —
+/// probes its UDP path and starts moving (Phase 2).
 public actor JoinSession {
     public nonisolated let events: AsyncStream<JoinSessionEvent>
     private let eventsContinuation: AsyncStream<JoinSessionEvent>.Continuation
@@ -22,19 +26,29 @@ public actor JoinSession {
     private let identity: PlayerIdentity
     private let displayName: String
     private let avatarPreset: String
+    /// Bundled map — its hash must match the host's (welcome.mapVersion).
+    private let mapHash: String
+    /// False when Settings → Connection forces TCP (ADR 0002).
+    private let preferUDP: Bool
 
     private var connection: FrameConnection?
     private var sendCipher: SecureChannelCipher?
+    private var datagram: DatagramChannel?
+    private var usingUDP = false
     private var task: Task<Void, Never>?
+    private var datagramTask: Task<Void, Never>?
 
     public init(
         endpoint: RelayEndpoint, identity: PlayerIdentity,
-        displayName: String, avatarPreset: String
+        displayName: String, avatarPreset: String,
+        mapHash: String, preferUDP: Bool
     ) {
         self.endpoint = endpoint
         self.identity = identity
         self.displayName = displayName
         self.avatarPreset = avatarPreset
+        self.mapHash = mapHash
+        self.preferUDP = preferUDP
         (events, eventsContinuation) = AsyncStream.makeStream()
     }
 
@@ -46,16 +60,31 @@ public actor JoinSession {
     }
 
     public func leave() async {
-        if var cipher = sendCipher, let connection {
-            if let sealed = try? cipher.seal(SessionMessage.leave.encoded()) {
-                try? await connection.send(frame: sealed)
-            }
-            sendCipher = cipher
-        }
+        await sendSealed(.leave)
         task?.cancel()
+        datagramTask?.cancel()
+        await datagram?.cancel()
         await connection?.cancel()
         eventsContinuation.yield(.ended(reason: "You left."))
         eventsContinuation.finish()
+    }
+
+    /// The scene's movement output, ~20 Hz while moving. Rides whichever road
+    /// the probe selected.
+    public func sendInput(_ frame: InputFrame) async {
+        guard let bytes = try? WorldPayload.input(frame).encoded() else { return }
+        if usingUDP, let datagram {
+            await datagram.send(bytes)
+        } else {
+            await sendSealed(.worldFrame(payload: Data(bytes)))
+        }
+    }
+
+    private func sendSealed(_ message: SessionMessage) async {
+        guard var cipher = sendCipher, let connection else { return }
+        guard let sealed = try? cipher.seal(message.encoded()) else { return }
+        sendCipher = cipher
+        try? await connection.send(frame: sealed)
     }
 
     private func run(code: String) async {
@@ -69,8 +98,9 @@ public actor JoinSession {
 
             var frames = connection.incomingFrames.makeAsyncIterator()
             var hostSessionKey: Data?
+            var flowInfo: (flowID: UInt32, token: UInt64)?
 
-            // Control stage: accepted (or denied), then the splice marker.
+            // Control stage: accepted (or denied) → flow credentials → splice.
             controlStage: while let frame = try await frames.next() {
                 switch try ControlMessage(decoding: frame) {
                 case .joinAccepted(_, let key, _):
@@ -79,6 +109,8 @@ public actor JoinSession {
                 case .joinDenied(let reason):
                     eventsContinuation.yield(.denied(reason: reason))
                     return
+                case .dataPlane(let flowID, let token):
+                    flowInfo = (flowID, token)
                 case .spliceBegin:
                     break controlStage
                 case .pong:
@@ -101,7 +133,7 @@ public actor JoinSession {
             guard let message2 = try await frames.next() else { throw ConnectionError.closed }
             let keys = try state.finalize(message2: message2)
             var receiveCipher = SecureChannelCipher(key: keys.receiveKey)
-            var sendCipher = SecureChannelCipher(key: keys.sendKey)
+            self.sendCipher = SecureChannelCipher(key: keys.sendKey)
 
             let hello = SessionMessage.joinHello(
                 identityKey: identity.publicKeyData,
@@ -110,25 +142,37 @@ public actor JoinSession {
                 inviteSecret: code,
                 signature: try JoinSignature.sign(identity: identity, transcriptHash: keys.transcriptHash)
             )
-            try await connection.send(frame: sendCipher.seal(hello.encoded()))
-            self.sendCipher = sendCipher
+            await sendSealed(hello)
             eventsContinuation.yield(.status("Knocking…"))
 
             while let frame = try await frames.next() {
                 switch try SessionMessage(decoding: receiveCipher.open(frame)) {
                 case .knockPending:
                     eventsContinuation.yield(.knockPending)
-                case .welcome(let spaceName, let roster):
+                case .welcome(let spaceName, let mapVersion, let hostAllowsUDP, let roster):
+                    guard mapVersion == mapHash else {
+                        eventsContinuation.yield(
+                            .denied(
+                                reason: "Map version mismatch — host and joiners must run "
+                                    + "the same app version."))
+                        await connection.cancel()
+                        return
+                    }
                     eventsContinuation.yield(.welcomed(spaceName: spaceName, roster: roster))
+                    await negotiateTransport(hostAllowsUDP: hostAllowsUDP, flowInfo: flowInfo, keys: keys)
                 case .rosterUpdate(let roster):
                     eventsContinuation.yield(.rosterChanged(roster))
+                case .worldFrame(let payload):
+                    if case .snapshot(let snapshot) = try? WorldPayload(decoding: [UInt8](payload)) {
+                        eventsContinuation.yield(.worldSnapshot(snapshot))
+                    }
                 case .denied(let reason):
                     eventsContinuation.yield(.denied(reason: reason))
                     return
                 case .leave:
                     eventsContinuation.yield(.ended(reason: "The host ended the session."))
                     return
-                case .joinHello:
+                case .joinHello, .transportSelected:
                     throw ConnectionError.protocolViolation
                 }
             }
@@ -138,6 +182,32 @@ public actor JoinSession {
         } catch {
             eventsContinuation.yield(.ended(reason: "Connection lost: \(error.humanReadable)"))
         }
+    }
+
+    /// Probe the UDP road; tell the host which one to use for us (ADR 0002).
+    private func negotiateTransport(
+        hostAllowsUDP: Bool, flowInfo: (flowID: UInt32, token: UInt64)?, keys: SessionKeys
+    ) async {
+        if preferUDP, hostAllowsUDP, let flow = flowInfo {
+            let channel = DatagramChannel(
+                endpoint: endpoint, flowID: flow.flowID, token: flow.token,
+                sendKey: keys.datagramSendKey, receiveKey: keys.datagramReceiveKey)
+            if await channel.start() {
+                datagram = channel
+                usingUDP = true
+                datagramTask = Task { [weak self] in
+                    for await payload in channel.incoming {
+                        if case .snapshot(let snapshot) = try? WorldPayload(decoding: payload) {
+                            self?.eventsContinuation.yield(.worldSnapshot(snapshot))
+                        }
+                    }
+                }
+            } else {
+                await channel.cancel()
+            }
+        }
+        await sendSealed(.transportSelected(useUDP: usingUDP))
+        eventsContinuation.yield(.transport(usingUDP: usingUDP))
     }
 }
 

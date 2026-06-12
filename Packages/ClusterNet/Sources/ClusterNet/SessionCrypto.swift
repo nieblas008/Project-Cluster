@@ -34,11 +34,14 @@ public struct HostSessionKey: Sendable {
     }
 }
 
-/// What a completed handshake yields: directional keys plus the transcript
-/// hash that identity signatures bind to (see `SessionSigning`).
+/// What a completed handshake yields: directional keys for the reliable
+/// tunnel *and* the datagram plane (ADR 0002), plus the transcript hash that
+/// identity signatures bind to (see `SessionSigning`).
 public struct SessionKeys: Sendable {
     public let sendKey: SymmetricKey
     public let receiveKey: SymmetricKey
+    public let datagramSendKey: SymmetricKey
+    public let datagramReceiveKey: SymmetricKey
     public let transcriptHash: Data
 }
 
@@ -69,11 +72,12 @@ public enum SessionHandshake {
             try openEmptyBox(tag: tag2, key: key2, transcript: transcript2)
 
             let finalTranscript = sha256(transcript2 + tag2)
-            let (initiatorToResponder, responderToInitiator) = split(
-                chain: chainKey2, transcript: finalTranscript)
+            let split = splitKeys(chain: chainKey2, transcript: finalTranscript)
             return SessionKeys(
-                sendKey: initiatorToResponder,
-                receiveKey: responderToInitiator,
+                sendKey: split.i2r,
+                receiveKey: split.r2i,
+                datagramSendKey: split.udpI2R,
+                datagramReceiveKey: split.udpR2I,
                 transcriptHash: finalTranscript
             )
         }
@@ -143,11 +147,12 @@ public enum SessionHandshake {
         let tag2 = try sealEmptyBox(key: key2, transcript: transcript2)
 
         let finalTranscript = sha256(transcript2 + tag2)
-        let (initiatorToResponder, responderToInitiator) = split(
-            chain: chainKey2, transcript: finalTranscript)
+        let split = splitKeys(chain: chainKey2, transcript: finalTranscript)
         let keys = SessionKeys(
-            sendKey: responderToInitiator,
-            receiveKey: initiatorToResponder,
+            sendKey: split.r2i,
+            receiveKey: split.i2r,
+            datagramSendKey: split.udpR2I,
+            datagramReceiveKey: split.udpI2R,
             transcriptHash: finalTranscript
         )
         return (keys, Array(responderEphemeralPublic + tag2))
@@ -179,14 +184,15 @@ public enum SessionHandshake {
         return (newChain, key)
     }
 
-    private static func split(
+    private static func splitKeys(
         chain: SymmetricKey, transcript: Data
-    ) -> (initiatorToResponder: SymmetricKey, responderToInitiator: SymmetricKey) {
-        let i2r = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: chain, salt: transcript, info: Data("i2r".utf8), outputByteCount: 32)
-        let r2i = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: chain, salt: transcript, info: Data("r2i".utf8), outputByteCount: 32)
-        return (i2r, r2i)
+    ) -> (i2r: SymmetricKey, r2i: SymmetricKey, udpI2R: SymmetricKey, udpR2I: SymmetricKey) {
+        func derive(_ info: String) -> SymmetricKey {
+            HKDF<SHA256>.deriveKey(
+                inputKeyMaterial: chain, salt: transcript, info: Data(info.utf8),
+                outputByteCount: 32)
+        }
+        return (derive("i2r"), derive("r2i"), derive("udp-i2r"), derive("udp-r2i"))
     }
 
     private static let zeroNonce = try! ChaChaPoly.Nonce(data: Data(repeating: 0, count: 12))

@@ -27,6 +27,7 @@ struct RelayDaemon: AsyncParsableCommand {
     mutating func run() async throws {
         let logger = Logger(label: "cluster-relayd")
         let registry = SessionRegistry()
+        let flows = FlowTable()
 
         let certificates = try NIOSSLCertificate.fromPEMFile(tlsCert)
         let tlsConfiguration = TLSConfiguration.makeServerConfiguration(
@@ -44,7 +45,7 @@ struct RelayDaemon: AsyncParsableCommand {
                     try channel.pipeline.syncOperations.addHandler(
                         NIOSSLServerHandler(context: sslContext))
                     try channel.pipeline.syncOperations.addHandler(
-                        ControlHandler(registry: registry, logger: logger))
+                        ControlHandler(registry: registry, flows: flows, logger: logger))
                 }
             }
             .bind(host: "0.0.0.0", port: controlPort)
@@ -54,7 +55,8 @@ struct RelayDaemon: AsyncParsableCommand {
             .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .channelInitializer { channel in
                 channel.eventLoop.makeCompletedFuture {
-                    try channel.pipeline.syncOperations.addHandler(UDPEchoHandler())
+                    try channel.pipeline.syncOperations.addHandler(
+                        UDPFlowHandler(flows: flows, logger: logger))
                 }
             }
             .bind(host: "0.0.0.0", port: udpPort)

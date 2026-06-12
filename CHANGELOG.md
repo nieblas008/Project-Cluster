@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.0 — Phase 2: The walkable mansion (2026-06-11)
+
+- The mansion exists: 44×30 generated map (great hall, library, lounge, four
+  offices with 16 desk zones, gardens, pond, and the kart-track loop reserved
+  for Phase 6), rendered in SpriteKit with generated tile + avatar art
+  (original, license-free — see assets/LICENSES.md).
+- Walking: WASD/arrows, client-side prediction with the shared sim, host-side
+  validation (speed clamp, wall clips refused), remote avatars interpolated
+  120 ms in the past, camera follow, nameplates.
+- 15 Hz authoritative world tick on the host, fanned out per member.
+- UDP datagram plane through the relay (ADR 0002): per-pair flows with token
+  binding, ChaChaPoly-sealed datagrams keyed from the tunnel handshake,
+  replay/reorder protection, idle flow sweep.
+- TCP fallback as a first-class road: same world payloads over the encrypted
+  tunnel, negotiated per player; Settings → Connection gains the
+  Automatic / TCP-only toggle; the join HUD shows which road you're on.
+- Wire version 2 (welcome carries map version + transport policy; map-hash
+  mismatch is refused with a clear message).
+- The CI smoke now walks: host + joiner converge rosters, the joiner moves
+  ~2 tiles, and the run executes twice — once over UDP, once forced to TCP.
+
 ## 0.2.0 — Phase 1: Relay, host & join (2026-06-11)
 
 - Real relay: TLS control plane (register → 6-character code → join → attach)
