@@ -22,11 +22,20 @@ final class AppModel {
 
     static let avatarPresets = ["default", "sky", "mint", "coral", "violet"]
 
+    /// Solo playtesting: `open -n App --args -ClusterProfile two` gives a
+    /// second instance its own identity + profile (relay settings stay shared).
+    static var launchProfile: String? {
+        UserDefaults.standard.string(forKey: "ClusterProfile")
+    }
+
+    private let displayNameKey: String
+    private let avatarPresetKey: String
+
     var displayName: String {
-        didSet { UserDefaults.standard.set(displayName, forKey: "displayName") }
+        didSet { UserDefaults.standard.set(displayName, forKey: displayNameKey) }
     }
     var avatarPreset: String {
-        didSet { UserDefaults.standard.set(avatarPreset, forKey: "avatarPreset") }
+        didSet { UserDefaults.standard.set(avatarPreset, forKey: avatarPresetKey) }
     }
 
     // MARK: Relay configuration (Settings)
@@ -76,10 +85,16 @@ final class AppModel {
         identity != nil && !displayName.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    init(secretStore: SecretStore = KeychainSecretStore()) {
+    init(secretStore: SecretStore? = nil) {
         let defaults = UserDefaults.standard
-        self.displayName = defaults.string(forKey: "displayName") ?? ""
-        self.avatarPreset = defaults.string(forKey: "avatarPreset") ?? "default"
+        let profile = Self.launchProfile
+        self.displayNameKey = profile.map { "displayName-\($0)" } ?? "displayName"
+        self.avatarPresetKey = profile.map { "avatarPreset-\($0)" } ?? "avatarPreset"
+        let store =
+            secretStore
+            ?? KeychainSecretStore(account: profile.map { "primary-\($0)" } ?? "primary")
+        self.displayName = defaults.string(forKey: displayNameKey) ?? ""
+        self.avatarPreset = defaults.string(forKey: avatarPresetKey) ?? "default"
         self.relayHost = defaults.string(forKey: "relayHost") ?? ""
         self.relayControlPort = defaults.string(forKey: "relayControlPort") ?? "7600"
         self.relayUDPPort = defaults.string(forKey: "relayUDPPort") ?? "7601"
@@ -95,7 +110,7 @@ final class AppModel {
             self.worldMapError = "mansion.json missing from the app bundle"
         }
         do {
-            self.identity = try IdentityManager.loadOrCreate(store: secretStore)
+            self.identity = try IdentityManager.loadOrCreate(store: store)
         } catch {
             self.identityError = "Could not load identity: \(error)"
         }
