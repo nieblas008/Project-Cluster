@@ -63,10 +63,15 @@ public struct InputFrame: Equatable, Sendable {
 public enum WorldPayload: Equatable, Sendable {
     case input(InputFrame)
     case snapshot(WorldSnapshot)
+    /// One 20 ms Opus frame. Joiner→host: speakerID is overwritten by the host
+    /// with the pair's verified identity (no voice spoofing); host→joiner:
+    /// speakerID tells the receiver whose jitter buffer this feeds.
+    case voice(speakerID: UInt64, seq: UInt32, opus: Data)
 
     private enum Kind: UInt8 {
         case input = 1
         case snapshot = 2
+        case voice = 3
     }
 
     public func encoded() throws -> [UInt8] {
@@ -91,6 +96,11 @@ public enum WorldPayload: Equatable, Sendable {
                 w.write(player.facing.rawValue)
                 w.write(player.isMoving)
             }
+        case .voice(let speakerID, let seq, let opus):
+            w.write(Kind.voice.rawValue)
+            w.write(speakerID)
+            w.write(seq)
+            try w.write(opus)
         }
         return w.bytes
     }
@@ -124,6 +134,9 @@ public enum WorldPayload: Equatable, Sendable {
                         id: id, x: x, y: y, facing: facing, isMoving: try r.readBool()))
             }
             self = .snapshot(WorldSnapshot(tick: tick, players: players))
+        case .voice:
+            self = .voice(
+                speakerID: try r.readUInt64(), seq: try r.readUInt32(), opus: try r.readData())
         }
     }
 }

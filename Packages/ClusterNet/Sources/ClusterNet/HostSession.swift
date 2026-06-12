@@ -9,6 +9,8 @@ public enum HostSessionEvent: Sendable {
     case rosterChanged([RosterEntry])
     /// The 15 Hz world state — the host's own scene renders from this too.
     case worldSnapshot(WorldSnapshot)
+    /// A speaker audible from the host's position — feed the host's playback.
+    case voiceReceived(speakerID: UInt64, seq: UInt32, opus: Data)
     case ended(reason: String)
 }
 
@@ -356,8 +358,13 @@ public actor HostSession {
                     await removeMember(playerID)
                     return
                 case .worldFrame(let payload):
-                    if case .input(let input) = try? WorldPayload(decoding: [UInt8](payload)) {
+                    switch try? WorldPayload(decoding: [UInt8](payload)) {
+                    case .input(let input):
                         applyInput(playerID: playerID, frame: input)
+                    case .voice(_, let seq, let opus):
+                        await fanOutVoice(fromPlayerID: playerID, seq: seq, opus: opus)
+                    default:
+                        break
                     }
                 case .transportSelected(let useUDP):
                     // Copy-modify-writeback: reading `members` inside a
@@ -384,11 +391,56 @@ public actor HostSession {
         tasks.append(
             Task { [weak self] in
                 for await payload in datagram.incoming {
-                    if case .input(let input) = try? WorldPayload(decoding: payload) {
+                    switch try? WorldPayload(decoding: payload) {
+                    case .input(let input):
                         await self?.applyInput(playerID: playerID, frame: input)
+                    case .voice(_, let seq, let opus):
+                        await self?.fanOutVoice(fromPlayerID: playerID, seq: seq, opus: opus)
+                    default:
+                        break
                     }
                 }
             })
+    }
+
+    // MARK: Voice fan-out (PLAN §8: the host is a micro-SFU)
+
+    /// The host's own mic frames enter the same fan-out as everyone else's.
+    public func sendHostVoice(seq: UInt32, opus: Data) async {
+        await fanOutVoice(fromPlayerID: identity.playerID, seq: seq, opus: opus)
+    }
+
+    /// Forward one voice frame to every member within earshot of the speaker.
+    /// speakerID is set from the *verified* pair identity — no spoofing — and
+    /// the payload is never decoded here, only re-sealed per pair.
+    private func fanOutVoice(fromPlayerID: String, seq: UInt32, opus: Data) async {
+        guard let speakerPosition = world[fromPlayerID]?.position else { return }
+        let speakerWireID = PlayerWireID.prefix(fromHexID: fromPlayerID)
+        guard
+            let bytes = try? WorldPayload.voice(speakerID: speakerWireID, seq: seq, opus: opus)
+                .encoded()
+        else { return }
+
+        for (memberID, member) in members where memberID != fromPlayerID {
+            guard let listenerPosition = world[memberID]?.position,
+                ProximityRules.standard.isAudible(
+                    atDistance: speakerPosition.distance(to: listenerPosition))
+            else { continue }
+            if member.wantsUDP, let datagram = member.datagram {
+                await datagram.send(bytes)
+            } else {
+                try? await sendMessage(.worldFrame(payload: Data(bytes)), to: memberID)
+            }
+        }
+
+        // The host listens too.
+        if fromPlayerID != identity.playerID,
+            let hostPosition = world[identity.playerID]?.position,
+            ProximityRules.standard.isAudible(
+                atDistance: speakerPosition.distance(to: hostPosition))
+        {
+            eventsContinuation.yield(.voiceReceived(speakerID: speakerWireID, seq: seq, opus: opus))
+        }
     }
 
     private func removeMember(_ playerID: String) async {

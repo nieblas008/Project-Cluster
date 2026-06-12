@@ -12,4 +12,9 @@ public enum VoiceFormat {
     public static let targetBitrate = 40_000
     /// Initial jitter-buffer depth; adapts at runtime within bounds (Phase 3).
     public static let initialJitterBufferSeconds: Double = 0.08
+    /// RMS above this opens the mic gate (voice-processed input is quiet when
+    /// you aren't speaking, so this can sit low).
+    public static let gateThreshold: Float = 0.012
+    /// Frames the gate stays open after the level drops — keeps word endings.
+    public static let gateHangoverFrames = 15
 }

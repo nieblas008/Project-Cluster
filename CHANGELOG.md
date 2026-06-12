@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.0 — Phase 3 (part 1): Proximity voice (2026-06-12)
+
+- Voice with zero third-party dependencies: Apple's native Opus codec via
+  AVAudioConverter, probed empirically before committing (ADR 0003).
+- Capture: voice-processed input (Apple echo cancellation / noise suppression
+  / gain control), 48 kHz mono, 20 ms frames, RMS mic gate with hangover —
+  silence is never sent.
+- Playback: per-speaker pipelines (jitter buffer with reorder/conceal/burst
+  logic → Opus decode → player node), one 20 ms playout timer.
+- The host is a micro-SFU (PLAN §8): voice frames fan out only to members
+  within earshot, speaker identity stamped from the verified pair (no
+  spoofing), payloads re-sealed per pair but never decoded.
+- Proximity volume: each snapshot drives per-speaker gain (full ≤5 tiles,
+  fade to silent at 10).
+- Voice rides the same two roads as movement: UDP datagrams or the TCP
+  tunnel (ADR 0002) — per player, automatically.
+- In-world HUD: mute toggle, live mic level, input-device picker, permission
+  errors with a fix path; speaking rings on avatars.
+- Microphone entitlement + usage description; the smoke test now TALKS:
+  synthetic Opus both directions through the relay, decoded and
+  energy-verified, on both transports.
+
 ## 0.3.0 — Phase 2: The walkable mansion (2026-06-11)
 
 - The mansion exists: 44×30 generated map (great hall, library, lounge, four

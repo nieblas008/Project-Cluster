@@ -12,13 +12,15 @@ let package = Package(
         .executable(name: "cluster-smoke", targets: ["cluster-smoke"]),
     ],
     dependencies: [
-        .package(path: "../ClusterProtocol")
+        .package(path: "../ClusterProtocol"),
+        .package(path: "../ClusterVoice"),
     ],
     targets: [
         .target(name: "ClusterNet", dependencies: ["ClusterProtocol"]),
         // End-to-end harness: hosts and joins through a real relay, used by CI
-        // and scripts/itest-phase1.sh. Not part of the app.
-        .executableTarget(name: "cluster-smoke", dependencies: ["ClusterNet"]),
+        // and scripts/itest-phase1.sh. Not part of the app. ClusterVoice is
+        // here for synthetic voice frames — the library target stays audio-free.
+        .executableTarget(name: "cluster-smoke", dependencies: ["ClusterNet", "ClusterVoice"]),
         .testTarget(name: "ClusterNetTests", dependencies: ["ClusterNet"]),
     ]
 )

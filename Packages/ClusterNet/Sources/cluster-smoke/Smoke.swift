@@ -1,18 +1,15 @@
+import AVFoundation
 import ClusterNet
 import ClusterProtocol
+import ClusterVoice
 import Foundation
 
-/// End-to-end Phase 1+2 smoke: register, join by code through a live relay,
-/// converge rosters, then WALK — the joiner moves and the host's authoritative
-/// snapshots must show it. Also asserts the negotiated transport matches
-/// expectations (ADR 0002).
-///
-/// Env: RELAY_HOST, RELAY_CONTROL_PORT (7600), RELAY_UDP_PORT (7601),
-///      RELAY_FINGERPRINT, CLUSTER_FORCE_TCP (optional, "1" = TCP-only mode).
+/// End-to-end smoke, Phases 1–3: join by code through a live relay, converge
+/// rosters, WALK (host-validated movement), then TALK (synthetic Opus frames
+/// through the host's proximity fan-out, decoded on arrival). Runs against
+/// both transports via CLUSTER_FORCE_TCP.
 @main
 struct Smoke {
-    static let walkSeconds = 1.2
-
     static func main() async {
         let env = ProcessInfo.processInfo.environment
         guard let host = env["RELAY_HOST"], let fingerprint = env["RELAY_FINGERPRINT"] else {
@@ -29,7 +26,7 @@ struct Smoke {
         let outcome = await withTaskGroup(of: Bool.self) { group in
             group.addTask { await runScenario(endpoint: endpoint, forceTCP: forceTCP) }
             group.addTask {
-                try? await Task.sleep(for: .seconds(25))
+                try? await Task.sleep(for: .seconds(30))
                 return false
             }
             let first = await group.next() ?? false
@@ -38,11 +35,33 @@ struct Smoke {
         }
 
         if outcome {
-            print("SMOKE OK — lobby converged, joiner walked, transport=\(forceTCP ? "tcp" : "udp")")
+            print("SMOKE OK — roster, walk, and voice all good, transport=\(forceTCP ? "tcp" : "udp")")
             exit(0)
         } else {
             fail("smoke scenario did not complete in time")
         }
+    }
+
+    /// Shared scoreboard between the event-consumer tasks and the main flow.
+    final class Results: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _walked = false
+        private var _transportOK: Bool?
+        private var _hostVoiceFrames = 0
+        private var _joinerVoiceFrames = 0
+        private var _failure: String?
+
+        var walked: Bool { lock.withLock { _walked } }
+        var transportOK: Bool? { lock.withLock { _transportOK } }
+        var hostVoiceFrames: Int { lock.withLock { _hostVoiceFrames } }
+        var joinerVoiceFrames: Int { lock.withLock { _joinerVoiceFrames } }
+        var failure: String? { lock.withLock { _failure } }
+
+        func markWalked() { lock.withLock { _walked = true } }
+        func markTransport(ok: Bool) { lock.withLock { _transportOK = ok } }
+        func addHostVoiceFrame() { lock.withLock { _hostVoiceFrames += 1 } }
+        func addJoinerVoiceFrame() { lock.withLock { _joinerVoiceFrames += 1 } }
+        func markFailure(_ reason: String) { lock.withLock { _failure = _failure ?? reason } }
     }
 
     /// 12×8 room: border walls (gid 2 collides), spawn at tile (3,3).
@@ -69,9 +88,23 @@ struct Smoke {
         return try! TiledMapLoader.load(data: Data(json.utf8))
     }
 
+    static func sineFrame() -> AVAudioPCMBuffer {
+        let format = AVAudioFormat(
+            standardFormatWithSampleRate: VoiceFormat.sampleRate, channels: 1)!
+        let buffer = AVAudioPCMBuffer(
+            pcmFormat: format, frameCapacity: AVAudioFrameCount(VoiceFormat.samplesPerFrame))!
+        buffer.frameLength = AVAudioFrameCount(VoiceFormat.samplesPerFrame)
+        for i in 0..<VoiceFormat.samplesPerFrame {
+            buffer.floatChannelData![0][i] =
+                sin(Float(i) * 2 * .pi * 440 / Float(VoiceFormat.sampleRate)) * 0.5
+        }
+        return buffer
+    }
+
     static func runScenario(endpoint: RelayEndpoint, forceTCP: Bool) async -> Bool {
         do {
             let map = testMap()
+            let results = Results()
             let hostIdentity = try IdentityManager.loadOrCreate(store: InMemorySecretStore())
             let joinerIdentity = try IdentityManager.loadOrCreate(store: InMemorySecretStore())
             let joinerWireID = PlayerWireID.prefix(fromHexID: joinerIdentity.playerID)
@@ -95,37 +128,48 @@ struct Smoke {
                 mapHash: map.contentHash, preferUDP: !forceTCP)
             await joiner.start(code: code)
 
-            // Drive the joiner: learn spawn from the first snapshot containing
-            // us, then walk right at legal speed; verify transport on the way.
-            let walkResult = Task<Bool, Never> {
+            // Host events: voice frames from the joiner must decode with energy.
+            let hostConsumer = Task {
+                let decoder = try? OpusDecoder()
+                for await event in host.events {
+                    switch event {
+                    case .voiceReceived(let speakerID, _, let opus):
+                        if speakerID == joinerWireID,
+                            let pcm = try? decoder?.decode(opus), pcm.rmsLevel > 0.01
+                        {
+                            results.addHostVoiceFrame()
+                        }
+                    case .ended(let reason):
+                        results.markFailure("host ended: \(reason)")
+                        return
+                    default:
+                        break
+                    }
+                }
+            }
+
+            // Joiner events: drive the walk, verify transport, collect voice.
+            let joinerConsumer = Task {
+                let decoder = try? OpusDecoder()
                 var spawn: Vec2?
                 var position: Vec2?
                 var seq: UInt32 = 0
-                var transportOK = false
-                let inputInterval = 0.05
 
                 for await event in joiner.events {
                     switch event {
                     case .transport(let usingUDP):
-                        transportOK = (usingUDP == !forceTCP)
-                        if !transportOK {
-                            print("smoke: unexpected transport — usingUDP=\(usingUDP), forceTCP=\(forceTCP)")
-                            return false
-                        }
+                        results.markTransport(ok: usingUDP == !forceTCP)
                     case .worldSnapshot(let snapshot):
-                        guard let me = snapshot.players.first(where: { $0.id == joinerWireID }) else {
-                            continue
-                        }
+                        guard let me = snapshot.players.first(where: { $0.id == joinerWireID })
+                        else { continue }
                         if spawn == nil {
                             spawn = me.position
                             position = me.position
-                            // Walk right for walkSeconds at the shared sim's legal pace.
-                            let steps = Int(Smoke.walkSeconds / inputInterval)
-                            for _ in 0..<steps {
+                            for _ in 0..<24 {
                                 seq += 1
                                 position = MovementSim.step(
                                     position: position!, input: MoveInput(dirX: 1, dirY: 0),
-                                    dt: inputInterval, collision: map.collision)
+                                    dt: 0.05, collision: map.collision)
                                 await joiner.sendInput(
                                     InputFrame(
                                         seq: seq, input: MoveInput(dirX: 1, dirY: 0),
@@ -133,30 +177,74 @@ struct Smoke {
                                 try? await Task.sleep(for: .milliseconds(50))
                             }
                         } else if let spawn, me.position.distance(to: spawn) > 1.5 {
-                            print(
-                                "smoke: host accepted the walk — moved "
-                                    + String(format: "%.2f", me.position.distance(to: spawn))
-                                    + " tiles, transportOK=\(transportOK)")
-                            return transportOK
+                            results.markWalked()
+                        }
+                    case .voiceReceived(_, _, let opus):
+                        if let pcm = try? decoder?.decode(opus), pcm.rmsLevel > 0.01 {
+                            results.addJoinerVoiceFrame()
                         }
                     case .denied(let reason), .ended(let reason):
-                        print("smoke: joiner ended early: \(reason)")
-                        return false
+                        results.markFailure("joiner ended: \(reason)")
+                        return
                     default:
                         break
                     }
                 }
-                return false
             }
 
-            let walked = await walkResult.value
+            // Phase: walk.
+            if !(await waitUntil { results.walked || results.failure != nil }) {
+                print("smoke: walk did not complete — \(results.failure ?? "timeout")")
+                return false
+            }
+            print("smoke: walk verified")
+
+            // Phase: talk — both directions, 12 frames each at 20 ms cadence.
+            let encoderJoiner = try OpusEncoder()
+            let encoderHost = try OpusEncoder()
+            for i in 1...12 {
+                await joiner.sendVoice(seq: UInt32(i), opus: try encoderJoiner.encode(sineFrame()))
+                await host.sendHostVoice(seq: UInt32(i), opus: try encoderHost.encode(sineFrame()))
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+
+            let voiceOK = await waitUntil {
+                (results.hostVoiceFrames >= 6 && results.joinerVoiceFrames >= 6)
+                    || results.failure != nil
+            }
+            print(
+                "smoke: voice frames — host got \(results.hostVoiceFrames), "
+                    + "joiner got \(results.joinerVoiceFrames)")
+
+            hostConsumer.cancel()
+            joinerConsumer.cancel()
             await joiner.leave()
             await host.stop()
-            return walked
+
+            guard results.failure == nil else {
+                print("smoke: failure — \(results.failure!)")
+                return false
+            }
+            guard results.transportOK == true else {
+                print("smoke: transport mismatch (forceTCP=\(forceTCP))")
+                return false
+            }
+            return voiceOK && results.walked
         } catch {
             print("smoke: error \(error)")
             return false
         }
+    }
+
+    static func waitUntil(
+        timeout: Double = 8, _ condition: @escaping () -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return condition()
     }
 
     static func fail(_ message: String) -> Never {

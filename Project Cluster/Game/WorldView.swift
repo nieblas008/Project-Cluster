@@ -1,5 +1,6 @@
 import ClusterNet
 import ClusterProtocol
+import ClusterVoice
 import SpriteKit
 import SwiftUI
 
@@ -32,9 +33,54 @@ struct WorldView: View {
         .onDisappear(perform: leaveWorldUI)
     }
 
+    private var voice: VoiceController {
+        switch mode {
+        case .host: model.hostLobby.voice
+        case .join: model.joinLobby.voice
+        }
+    }
+
+    @ViewBuilder
+    private var micControls: some View {
+        HStack(spacing: 8) {
+            Button {
+                voice.micMuted.toggle()
+            } label: {
+                Image(systemName: voice.micMuted ? "mic.slash.fill" : "mic.fill")
+                    .foregroundStyle(voice.micMuted ? .red : .white)
+            }
+            .buttonStyle(.borderless)
+            .help(voice.micMuted ? "Unmute microphone" : "Mute microphone")
+
+            Circle()
+                .fill(voice.micMuted ? Color.gray : Color.green)
+                .frame(width: 7, height: 7)
+                .opacity(0.25 + Double(min(voice.micLevel * 12, 0.75)))
+
+            Menu {
+                ForEach(voice.inputDevices) { device in
+                    Button(device.name) { voice.selectedInputDevice = device.id }
+                }
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 24)
+            .help("Choose microphone")
+
+            if let error = voice.errorMessage {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+                    .help(error)
+            }
+        }
+        .hudChip()
+    }
+
     @ViewBuilder
     private var hud: some View {
         HStack(spacing: 12) {
+            micControls
             switch mode {
             case .host:
                 if case .hosting(let code) = model.hostLobby.state {
@@ -100,13 +146,16 @@ struct WorldView: View {
             localDisplayName: model.displayName,
             localPreset: model.avatarPreset
         )
+        let wireID = PlayerWireID.prefix(fromHexID: identity.playerID)
         switch mode {
         case .host:
             newScene.worldDelegate = model.hostLobby
             model.hostLobby.scene = newScene
+            model.hostLobby.startVoice(localWireID: wireID)
         case .join:
             newScene.worldDelegate = model.joinLobby
             model.joinLobby.scene = newScene
+            model.joinLobby.startVoice(localWireID: wireID)
         }
         scene = newScene
         keys.install { [weak newScene] input in
@@ -116,6 +165,7 @@ struct WorldView: View {
 
     private func leaveWorldUI() {
         keys.remove()
+        voice.stop()
         switch mode {
         case .host: model.hostLobby.scene = nil
         case .join: model.joinLobby.scene = nil

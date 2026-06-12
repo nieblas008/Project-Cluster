@@ -25,9 +25,19 @@ final class HostLobbyModel {
     private(set) var errorMessage: String?
     var inWorld = false
 
-    weak var scene: WorldScene?
+    let voice = VoiceController()
+    weak var scene: WorldScene? {
+        didSet { voice.onSpeakingChanged = { [weak self] ids in self?.scene?.setSpeaking(ids) } }
+    }
     private var session: HostSession?
     private var eventsTask: Task<Void, Never>?
+
+    func startVoice(localWireID: UInt64) {
+        let session = session
+        voice.start(localWireID: localWireID) { seq, opus in
+            await session?.sendHostVoice(seq: seq, opus: opus)
+        }
+    }
 
     func start(
         endpoint: RelayEndpoint, identity: PlayerIdentity, displayName: String,
@@ -74,6 +84,9 @@ final class HostLobbyModel {
                     self.scene?.applyRoster(roster)
                 case .worldSnapshot(let snapshot):
                     self.scene?.applySnapshot(snapshot)
+                    self.voice.updateProximity(snapshot: snapshot)
+                case .voiceReceived(let speakerID, let seq, let opus):
+                    self.voice.receive(speakerID: speakerID, seq: seq, opus: opus)
                 case .ended(let reason):
                     if self.state != .idle {
                         self.errorMessage = reason
@@ -104,6 +117,7 @@ final class HostLobbyModel {
         roster = []
         knocks = []
         inWorld = false
+        voice.stop()
     }
 }
 
@@ -136,10 +150,20 @@ final class JoinLobbyModel {
     private(set) var roster: [RosterEntry] = []
     private(set) var usingUDP: Bool?
 
-    weak var scene: WorldScene?
+    let voice = VoiceController()
+    weak var scene: WorldScene? {
+        didSet { voice.onSpeakingChanged = { [weak self] ids in self?.scene?.setSpeaking(ids) } }
+    }
     private var session: JoinSession?
     private var eventsTask: Task<Void, Never>?
     private var inputSeq: UInt32 = 0
+
+    func startVoice(localWireID: UInt64) {
+        let session = session
+        voice.start(localWireID: localWireID) { seq, opus in
+            await session?.sendVoice(seq: seq, opus: opus)
+        }
+    }
 
     func join(
         code: String, endpoint: RelayEndpoint, identity: PlayerIdentity, displayName: String,
@@ -172,6 +196,9 @@ final class JoinLobbyModel {
                     self.usingUDP = udp
                 case .worldSnapshot(let snapshot):
                     self.scene?.applySnapshot(snapshot)
+                    self.voice.updateProximity(snapshot: snapshot)
+                case .voiceReceived(let speakerID, let seq, let opus):
+                    self.voice.receive(speakerID: speakerID, seq: seq, opus: opus)
                 case .denied(let reason):
                     self.state = .denied(reason: reason)
                     self.roster = []
@@ -197,6 +224,7 @@ final class JoinLobbyModel {
         state = .idle
         roster = []
         usingUDP = nil
+        voice.stop()
         Task { await session?.leave() }
     }
 

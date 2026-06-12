@@ -157,6 +157,10 @@ private func walledRoom() -> CollisionMap {
                     PlayerSnapshot(id: 0xCD34, x: 8.5, y: 3.25, facing: .down, isMoving: false),
                 ]))
         #expect(try WorldPayload(decoding: snapshot.encoded()) == snapshot)
+
+        let voice = WorldPayload.voice(
+            speakerID: 0xFEED, seq: 42, opus: Data((0..<120).map { UInt8($0) }))
+        #expect(try WorldPayload(decoding: voice.encoded()) == voice)
     }
 
     @Test func wireIDPrefixIsStable() {

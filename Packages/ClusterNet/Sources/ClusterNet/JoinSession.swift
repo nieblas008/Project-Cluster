@@ -11,6 +11,8 @@ public enum JoinSessionEvent: Sendable {
     /// Which road world traffic took after probing (ADR 0002) — for the UI badge.
     case transport(usingUDP: Bool)
     case worldSnapshot(WorldSnapshot)
+    /// A speaker within earshot (the host already proximity-filtered).
+    case voiceReceived(speakerID: UInt64, seq: UInt32, opus: Data)
     case denied(reason: String)
     case ended(reason: String)
 }
@@ -72,7 +74,17 @@ public actor JoinSession {
     /// The scene's movement output, ~20 Hz while moving. Rides whichever road
     /// the probe selected.
     public func sendInput(_ frame: InputFrame) async {
-        guard let bytes = try? WorldPayload.input(frame).encoded() else { return }
+        await sendWorld(.input(frame))
+    }
+
+    /// One mic frame (the engine already gated silence).
+    public func sendVoice(seq: UInt32, opus: Data) async {
+        let speakerID = PlayerWireID.prefix(fromHexID: identity.playerID)
+        await sendWorld(.voice(speakerID: speakerID, seq: seq, opus: opus))
+    }
+
+    private func sendWorld(_ payload: WorldPayload) async {
+        guard let bytes = try? payload.encoded() else { return }
         if usingUDP, let datagram {
             await datagram.send(bytes)
         } else {
@@ -163,9 +175,7 @@ public actor JoinSession {
                 case .rosterUpdate(let roster):
                     eventsContinuation.yield(.rosterChanged(roster))
                 case .worldFrame(let payload):
-                    if case .snapshot(let snapshot) = try? WorldPayload(decoding: [UInt8](payload)) {
-                        eventsContinuation.yield(.worldSnapshot(snapshot))
-                    }
+                    yieldWorld(try? WorldPayload(decoding: [UInt8](payload)))
                 case .denied(let reason):
                     eventsContinuation.yield(.denied(reason: reason))
                     return
@@ -184,6 +194,17 @@ public actor JoinSession {
         }
     }
 
+    private func yieldWorld(_ payload: WorldPayload?) {
+        switch payload {
+        case .snapshot(let snapshot):
+            eventsContinuation.yield(.worldSnapshot(snapshot))
+        case .voice(let speakerID, let seq, let opus):
+            eventsContinuation.yield(.voiceReceived(speakerID: speakerID, seq: seq, opus: opus))
+        default:
+            break
+        }
+    }
+
     /// Probe the UDP road; tell the host which one to use for us (ADR 0002).
     private func negotiateTransport(
         hostAllowsUDP: Bool, flowInfo: (flowID: UInt32, token: UInt64)?, keys: SessionKeys
@@ -197,9 +218,7 @@ public actor JoinSession {
                 usingUDP = true
                 datagramTask = Task { [weak self] in
                     for await payload in channel.incoming {
-                        if case .snapshot(let snapshot) = try? WorldPayload(decoding: payload) {
-                            self?.eventsContinuation.yield(.worldSnapshot(snapshot))
-                        }
+                        await self?.yieldWorld(try? WorldPayload(decoding: payload))
                     }
                 }
             } else {

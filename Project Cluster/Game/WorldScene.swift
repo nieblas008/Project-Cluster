@@ -69,6 +69,13 @@ final class WorldScene: SKScene {
         currentInput = input
     }
 
+    func setSpeaking(_ ids: Set<UInt64>) {
+        localNode?.setSpeaking(ids.contains(localWireID))
+        for (id, node) in remoteNodes {
+            node.setSpeaking(ids.contains(id))
+        }
+    }
+
     func applyRoster(_ roster: [RosterEntry]) {
         rosterMeta = Dictionary(
             uniqueKeysWithValues: roster.map {
@@ -238,11 +245,20 @@ final class WorldScene: SKScene {
 final class AvatarNode: SKNode {
     private let body: SKSpriteNode
     private let nameplate: SKLabelNode
+    private let speakingRing: SKShapeNode
 
     init(displayName: String) {
         body = SKSpriteNode(color: .systemTeal, size: CGSize(width: 32, height: 32))
         nameplate = SKLabelNode(text: displayName)
+        speakingRing = SKShapeNode(circleOfRadius: 19)
         super.init()
+
+        speakingRing.strokeColor = NSColor(srgbRed: 0.35, green: 0.95, blue: 0.55, alpha: 0.95)
+        speakingRing.lineWidth = 2.5
+        speakingRing.fillColor = .clear
+        speakingRing.zPosition = 4
+        speakingRing.isHidden = true
+        addChild(speakingRing)
 
         nameplate.fontName = "Menlo-Bold"
         nameplate.fontSize = 11
@@ -267,6 +283,10 @@ final class AvatarNode: SKNode {
 
     required init?(coder: NSCoder) {
         fatalError("not used")
+    }
+
+    func setSpeaking(_ speaking: Bool) {
+        speakingRing.isHidden = !speaking
     }
 
     func apply(point: CGPoint, facing: Facing, moving: Bool, texture: SKTexture?) {
