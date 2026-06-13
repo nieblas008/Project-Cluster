@@ -121,12 +121,58 @@ import Testing
         for seq in 1...40 {
             jitter.push(seq: UInt32(seq), frame: data(UInt32(seq)))
         }
-        #expect(jitter.bufferedFrameCount <= 25)
+        #expect(jitter.bufferedFrameCount <= 30)
         // First pop should be near the live edge, not seq 1.
         if case .frame(let frame) = jitter.pop() {
             #expect(frame != data(1))
         } else {
             Issue.record("expected a frame")
         }
+    }
+
+    @Test func statsCountPlayConcealAndLateDrops() {
+        var jitter = JitterBuffer(targetDepth: 2)
+        jitter.push(seq: 1, frame: data(1))
+        jitter.push(seq: 2, frame: data(2))
+        jitter.push(seq: 4, frame: data(4))  // 3 lost
+        _ = jitter.pop()  // 1
+        _ = jitter.pop()  // 2
+        _ = jitter.pop()  // conceal (3)
+        _ = jitter.pop()  // 4
+        jitter.push(seq: 2, frame: data(2))  // late
+        #expect(jitter.stats.played == 3)
+        #expect(jitter.stats.concealed == 1)
+        #expect(jitter.stats.lateDropped == 1)
+        #expect(jitter.stats.concealmentRate > 0 && jitter.stats.concealmentRate < 0.5)
+    }
+
+    @Test func depthGrowsAfterAConcealedBurst() {
+        var jitter = JitterBuffer(targetDepth: 2)
+        #expect(jitter.currentDepth == 2)
+        // Burst with a hole, then dry → endBurst sees a conceal.
+        jitter.push(seq: 1, frame: data(1))
+        jitter.push(seq: 2, frame: data(2))
+        jitter.push(seq: 4, frame: data(4))
+        _ = jitter.pop()  // 1
+        _ = jitter.pop()  // 2
+        _ = jitter.pop()  // conceal 3
+        _ = jitter.pop()  // 4
+        _ = jitter.pop()  // dry → endBurst (had a conceal) → depth up
+        #expect(jitter.currentDepth == 3)
+    }
+
+    @Test func depthNeverDropsBelowTheCallersFloor() {
+        var jitter = JitterBuffer(targetDepth: 4)
+        // Several clean bursts; depth must not sink under the requested 4.
+        for burst in 0..<8 {
+            let base = UInt32(burst * 100 + 1)
+            jitter.push(seq: base, frame: data(base))
+            jitter.push(seq: base + 1, frame: data(base + 1))
+            jitter.push(seq: base + 2, frame: data(base + 2))
+            jitter.push(seq: base + 3, frame: data(base + 3))
+            while case .frame = jitter.pop() {}
+            _ = jitter.pop()
+        }
+        #expect(jitter.currentDepth >= 4)
     }
 }

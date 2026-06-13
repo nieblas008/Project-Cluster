@@ -52,21 +52,36 @@ struct WorldView: View {
             .buttonStyle(.borderless)
             .help(voice.micMuted ? "Unmute microphone" : "Mute microphone")
 
+            // Green when the mic is actually transmitting (open mic past the
+            // gate, or PTT held); brightness tracks level.
             Circle()
-                .fill(voice.micMuted ? Color.gray : Color.green)
+                .fill(voice.micMuted ? Color.gray : (transmitting ? Color.green : Color.green.opacity(0.4)))
                 .frame(width: 7, height: 7)
-                .opacity(0.25 + Double(min(voice.micLevel * 12, 0.75)))
+                .opacity(0.3 + Double(min(voice.micLevel * 12, 0.7)))
+
+            if voice.pushToTalk {
+                Text(voice.pttHeld ? "ON AIR" : "Hold ⌥")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(voice.pttHeld ? .green : .secondary)
+            }
 
             Menu {
-                ForEach(voice.inputDevices) { device in
-                    Button(device.name) { voice.selectedInputDevice = device.id }
+                Section("Microphone") {
+                    ForEach(voice.inputDevices) { device in
+                        Button(device.name) { voice.selectedInputDevice = device.id }
+                    }
+                }
+                Section("Output") {
+                    ForEach(voice.outputDevices) { device in
+                        Button(device.name) { voice.selectedOutputDevice = device.id }
+                    }
                 }
             } label: {
                 Image(systemName: "chevron.down")
             }
             .menuStyle(.borderlessButton)
             .frame(width: 24)
-            .help("Choose microphone")
+            .help("Choose microphone & output")
 
             if let error = voice.errorMessage {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -75,6 +90,35 @@ struct WorldView: View {
             }
         }
         .hudChip()
+    }
+
+    private var transmitting: Bool {
+        guard !voice.micMuted else { return false }
+        return voice.pushToTalk ? voice.pttHeld : voice.micLevel > 0.012
+    }
+
+    /// Connection-quality dots — only the joiner has a meaningful read (it's
+    /// derived from the host's snapshot cadence reaching this client).
+    @ViewBuilder
+    private var qualityIndicator: some View {
+        let q = voice.quality
+        HStack(spacing: 2) {
+            ForEach(1...3, id: \.self) { bar in
+                Capsule()
+                    .fill(q.rawValue >= bar ? qualityColor(q) : Color.white.opacity(0.25))
+                    .frame(width: 3, height: CGFloat(4 + bar * 3))
+            }
+        }
+        .help("Connection: \(q.label)")
+        .hudChip()
+    }
+
+    private func qualityColor(_ q: ConnectionQuality) -> Color {
+        switch q {
+        case .good: .green
+        case .fair: .yellow
+        case .poor, .lost: .red
+        }
     }
 
     @ViewBuilder
@@ -128,6 +172,7 @@ struct WorldView: View {
                                 : "Movement rides the TCP tunnel — works everywhere, a touch more latency. Configurable in Settings → Connection."
                         )
                 }
+                qualityIndicator
                 Text("\(model.joinLobby.roster.count) here").hudChip()
                 Spacer()
                 Button("Leave") { model.joinLobby.leave() }
@@ -151,16 +196,17 @@ struct WorldView: View {
         case .host:
             newScene.worldDelegate = model.hostLobby
             model.hostLobby.scene = newScene
-            model.hostLobby.startVoice(localWireID: wireID)
+            model.hostLobby.startVoice(localWireID: wireID, pushToTalk: model.pushToTalk)
         case .join:
             newScene.worldDelegate = model.joinLobby
             model.joinLobby.scene = newScene
-            model.joinLobby.startVoice(localWireID: wireID)
+            model.joinLobby.startVoice(localWireID: wireID, pushToTalk: model.pushToTalk)
         }
         scene = newScene
-        keys.install { [weak newScene] input in
-            newScene?.setInput(input)
-        }
+        keys.install(
+            onChange: { [weak newScene] input in newScene?.setInput(input) },
+            onPushToTalk: { held in voice.pttHeld = held }
+        )
     }
 
     private func leaveWorldUI() {
@@ -200,7 +246,10 @@ final class KeyState {
         125: MoveInput(dirX: 0, dirY: 1),  // ↓
     ]
 
-    func install(onChange: @escaping (MoveInput) -> Void) {
+    func install(
+        onChange: @escaping (MoveInput) -> Void,
+        onPushToTalk: @escaping (Bool) -> Void
+    ) {
         remove()
         let down = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, Self.keyMap[event.keyCode] != nil, !event.isARepeat else {
@@ -216,7 +265,13 @@ final class KeyState {
             onChange(self.combinedInput())
             return nil
         }
-        monitors = [down, up].compactMap { $0 }
+        // Option held = push-to-talk key. A modifier never collides with
+        // movement (or the future kart handbrake on Space).
+        let flags = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            onPushToTalk(event.modifierFlags.contains(.option))
+            return event
+        }
+        monitors = [down, up, flags].compactMap { $0 }
     }
 
     func remove() {

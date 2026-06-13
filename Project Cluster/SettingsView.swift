@@ -33,6 +33,21 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                 }
 
+                Section("Voice") {
+                    Toggle("Push-to-talk (hold ⌥ Option)", isOn: $model.pushToTalk)
+                    Text(
+                        model.pushToTalk
+                            ? "Your mic is muted until you hold the Option key."
+                            : "Open mic: you transmit automatically when you speak. "
+                                + "Switch to push-to-talk for noisy rooms."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Text("Microphone & output devices are chosen from the in-world toolbar.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section {
                     HStack {
                         Button("Run Connectivity Doctor") {

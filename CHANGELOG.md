@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 — Phase 3 (part 2): Voice finishing pass (2026-06-13)
+
+- Push-to-talk: hold ⌥ Option to transmit (a modifier never collides with
+  movement or the future kart handbrake); toggle in Settings → Voice, open
+  mic stays the default. HUD shows "Hold ⌥" / "ON AIR".
+- Output-device selection in the in-world toolbar (route playback to
+  headphones to break an echo loop); mic picker moved alongside it.
+- Adaptive jitter buffer: depth grows after a concealed burst and eases back
+  after clean ones, only ever changing at talk-burst boundaries so within-burst
+  playout stays deterministic. Receive-side VoiceStats (played / concealed /
+  late-dropped) exposed.
+- Connection-quality indicator (joiner): a 3-bar read derived from the host's
+  snapshot cadence — good / fair / poor / lost — in the HUD.
+- Settings → Voice section for the push-to-talk preference (persisted).
+
 ## 0.4.0 — Phase 3 (part 1): Proximity voice (2026-06-12)
 
 - Voice with zero third-party dependencies: Apple's native Opus codec via

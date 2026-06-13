@@ -40,6 +40,11 @@ public final class VoiceEngine: @unchecked Sendable {
     private var gateOpenFrames = 0
     private var running = false
 
+    /// When true, the RMS gate is ignored and only `pushToTalkActive` opens the
+    /// mic (Phase 3 part 2). Default off = open-mic with the RMS gate.
+    private var pushToTalkEnabled = false
+    private var pushToTalkActive = false
+
     private final class SpeakerPipeline {
         let player = AVAudioPlayerNode()
         var jitter = JitterBuffer()
@@ -112,6 +117,25 @@ public final class VoiceEngine: @unchecked Sendable {
         queue.async { self.muted = value }
     }
 
+    public func setPushToTalk(enabled: Bool) {
+        queue.async {
+            self.pushToTalkEnabled = enabled
+            if enabled { self.pushToTalkActive = false }
+        }
+    }
+
+    /// Held-key state from the UI; only meaningful when PTT is enabled.
+    public func setPushToTalkActive(_ active: Bool) {
+        queue.async { self.pushToTalkActive = active }
+    }
+
+    /// Summed receive-side health across every speaker, for the quality UI.
+    public func snapshotStats() -> VoiceStats {
+        queue.sync {
+            pipelines.values.reduce(VoiceStats()) { $0 + $1.jitter.stats }
+        }
+    }
+
     // MARK: Capture
 
     private func ingestCapture(_ buffer: AVAudioPCMBuffer) {
@@ -157,15 +181,22 @@ public final class VoiceEngine: @unchecked Sendable {
 
         let level = frameBuffer.rmsLevel
         onLevel?(level)
+        guard !muted, let encoder else { return }
 
-        // Gate: open on signal, stay open through brief dips (hangover) so
-        // word endings aren't clipped. Muted = gate welded shut.
-        if !muted && level > VoiceFormat.gateThreshold {
-            gateOpenFrames = VoiceFormat.gateHangoverFrames
-        } else if gateOpenFrames > 0 {
-            gateOpenFrames -= 1
+        // Two gates. Push-to-talk: the held key is the gate, period. Open mic:
+        // RMS opens it, a hangover keeps word endings from clipping.
+        let open: Bool
+        if pushToTalkEnabled {
+            open = pushToTalkActive
+        } else {
+            if level > VoiceFormat.gateThreshold {
+                gateOpenFrames = VoiceFormat.gateHangoverFrames
+            } else if gateOpenFrames > 0 {
+                gateOpenFrames -= 1
+            }
+            open = gateOpenFrames > 0
         }
-        guard !muted, gateOpenFrames > 0, let encoder else { return }
+        guard open else { return }
 
         if let opus = try? encoder.encode(frameBuffer) {
             onEncodedFrame?(opus, level)
@@ -289,10 +320,51 @@ public final class VoiceEngine: @unchecked Sendable {
         }
     }
 
+    // MARK: Output devices
+
+    public static func availableOutputDevices() -> [InputDevice] {
+        allDeviceIDs().compactMap { id in
+            guard channelCount(of: id, scope: kAudioDevicePropertyScopeOutput) > 0,
+                let name = deviceName(of: id)
+            else { return nil }
+            return InputDevice(id: id, name: name)
+        }
+    }
+
+    /// Routes all speaker playback to `deviceID` (e.g. headphones to break an
+    /// echo loop). Best-effort; failures are non-fatal (stays on default).
+    public func setOutputDevice(_ deviceID: AudioDeviceID) {
+        queue.async {
+            try? self.engine.outputNode.auAudioUnit.setDeviceID(deviceID)
+        }
+    }
+
+    private static func allDeviceIDs() -> [AudioDeviceID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard
+            AudioObjectGetPropertyDataSize(
+                AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr
+        else { return [] }
+        var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr
+        else { return [] }
+        return ids
+    }
+
     private static func inputChannelCount(of device: AudioDeviceID) -> Int {
+        channelCount(of: device, scope: kAudioDevicePropertyScopeInput)
+    }
+
+    private static func channelCount(of device: AudioDeviceID, scope: AudioObjectPropertyScope) -> Int {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyStreamConfiguration,
-            mScope: kAudioDevicePropertyScopeInput,
+            mScope: scope,
             mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr, size > 0

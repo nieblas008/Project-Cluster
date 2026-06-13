@@ -32,9 +32,9 @@ final class HostLobbyModel {
     private var session: HostSession?
     private var eventsTask: Task<Void, Never>?
 
-    func startVoice(localWireID: UInt64) {
+    func startVoice(localWireID: UInt64, pushToTalk: Bool) {
         let session = session
-        voice.start(localWireID: localWireID) { seq, opus in
+        voice.start(localWireID: localWireID, pushToTalk: pushToTalk) { seq, opus in
             await session?.sendHostVoice(seq: seq, opus: opus)
         }
     }
@@ -158,9 +158,9 @@ final class JoinLobbyModel {
     private var eventsTask: Task<Void, Never>?
     private var inputSeq: UInt32 = 0
 
-    func startVoice(localWireID: UInt64) {
+    func startVoice(localWireID: UInt64, pushToTalk: Bool) {
         let session = session
-        voice.start(localWireID: localWireID) { seq, opus in
+        voice.start(localWireID: localWireID, pushToTalk: pushToTalk) { seq, opus in
             await session?.sendVoice(seq: seq, opus: opus)
         }
     }

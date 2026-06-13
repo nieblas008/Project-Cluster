@@ -3,10 +3,11 @@ import ClusterVoice
 import CoreAudio
 import Foundation
 import Observation
+import QuartzCore
 
 /// Binds a VoiceEngine to a session: mic frames out, speakers' frames in,
 /// proximity gains from world snapshots, speaking indicators for the scene,
-/// and the HUD's mute/level/device state.
+/// connection quality, and the HUD/Settings voice state.
 @MainActor
 @Observable
 final class VoiceController {
@@ -17,9 +18,24 @@ final class VoiceController {
     private(set) var micLevel: Float = 0
     private(set) var speakingIDs: Set<UInt64> = []
     private(set) var inputDevices: [VoiceEngine.InputDevice] = []
+    private(set) var outputDevices: [VoiceEngine.InputDevice] = []
+    private(set) var quality: ConnectionQuality = .good
+    private(set) var stats = VoiceStats()
 
     var micMuted = false {
         didSet { engine.setMuted(micMuted) }
+    }
+
+    /// Push-to-talk vs open mic (persisted in AppModel, pushed in on start).
+    var pushToTalk = false {
+        didSet {
+            engine.setPushToTalk(enabled: pushToTalk)
+            if !pushToTalk { pttHeld = false }
+        }
+    }
+    /// The HUD/key layer sets this while the talk key is held.
+    var pttHeld = false {
+        didSet { engine.setPushToTalkActive(pttHeld) }
     }
 
     var selectedInputDevice: AudioDeviceID? {
@@ -33,6 +49,13 @@ final class VoiceController {
         }
     }
 
+    var selectedOutputDevice: AudioDeviceID? {
+        didSet {
+            guard let id = selectedOutputDevice, id != oldValue else { return }
+            engine.setOutputDevice(id)
+        }
+    }
+
     /// Scene hook — set by the lobby model that owns the WorldScene.
     var onSpeakingChanged: ((Set<UInt64>) -> Void)?
 
@@ -40,14 +63,17 @@ final class VoiceController {
     private var sendSeq: UInt32 = 0
     private var sendFrame: ((UInt32, Data) async -> Void)?
     private var lastFrameAt: [UInt64: Date] = [:]
+    private var qualityEstimator = ConnectionQualityEstimator()
     private var decayTask: Task<Void, Never>?
 
-    func start(localWireID: UInt64, sendFrame: @escaping (UInt32, Data) async -> Void) {
+    func start(localWireID: UInt64, pushToTalk: Bool, sendFrame: @escaping (UInt32, Data) async -> Void) {
         guard !active else { return }
         self.localWireID = localWireID
         self.sendFrame = sendFrame
         self.errorMessage = nil
+        self.pushToTalk = pushToTalk
         inputDevices = VoiceEngine.availableInputDevices()
+        outputDevices = VoiceEngine.availableOutputDevices()
 
         engine.onLevel = { [weak self] level in
             Task { @MainActor [weak self] in
@@ -81,7 +107,10 @@ final class VoiceController {
         decayTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
-                self?.decaySpeaking()
+                guard let self else { return }
+                self.decaySpeaking()
+                self.quality = self.qualityEstimator.quality(now: CACurrentMediaTimeShim())
+                self.stats = self.engine.snapshotStats()
             }
         }
     }
@@ -94,6 +123,8 @@ final class VoiceController {
         micLevel = 0
         speakingIDs = []
         lastFrameAt = [:]
+        quality = .good
+        qualityEstimator = ConnectionQualityEstimator()
         onSpeakingChanged?([])
     }
 
@@ -102,8 +133,10 @@ final class VoiceController {
         noteSpeaking(speakerID)
     }
 
-    /// Each snapshot: distance → gain per remote speaker (PLAN §8 curve).
+    /// Each snapshot: distance → gain per remote speaker (PLAN §8 curve), and
+    /// the arrival cadence drives the connection-quality read.
     func updateProximity(snapshot: WorldSnapshot) {
+        qualityEstimator.recordArrival(at: CACurrentMediaTimeShim())
         guard let me = snapshot.players.first(where: { $0.id == localWireID }) else { return }
         for player in snapshot.players where player.id != localWireID {
             let gain = ProximityRules.standard.gain(
@@ -133,3 +166,6 @@ final class VoiceController {
         onSpeakingChanged?(speakingIDs)
     }
 }
+
+/// A tiny indirection so the controller reads one monotonic clock everywhere.
+func CACurrentMediaTimeShim() -> Double { CACurrentMediaTime() }

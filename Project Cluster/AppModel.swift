@@ -68,6 +68,12 @@ final class AppModel {
     }
     var preferUDP: Bool { transportMode != "tcp" }
 
+    /// Push-to-talk (hold ⌥) vs open mic. Persisted; pushed into VoiceController
+    /// when entering the world.
+    var pushToTalk: Bool {
+        didSet { UserDefaults.standard.set(pushToTalk, forKey: "pushToTalk") }
+    }
+
     /// The bundled mansion, loaded once.
     private(set) var worldMap: WorldMap?
     private(set) var worldMapError: String?
@@ -100,6 +106,7 @@ final class AppModel {
         self.relayUDPPort = defaults.string(forKey: "relayUDPPort") ?? "7601"
         self.relayFingerprint = defaults.string(forKey: "relayFingerprint") ?? ""
         self.transportMode = defaults.string(forKey: "transportMode") ?? "auto"
+        self.pushToTalk = defaults.bool(forKey: "pushToTalk")
         if let url = Bundle.main.url(forResource: "mansion", withExtension: "json") {
             do {
                 self.worldMap = try TiledMapLoader.load(data: try Data(contentsOf: url))
