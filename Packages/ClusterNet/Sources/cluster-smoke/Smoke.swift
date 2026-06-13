@@ -35,7 +35,9 @@ struct Smoke {
         }
 
         if outcome {
-            print("SMOKE OK — roster, walk, and voice all good, transport=\(forceTCP ? "tcp" : "udp")")
+            print(
+                "SMOKE OK — roster, walk, voice, and status all good, "
+                    + "transport=\(forceTCP ? "tcp" : "udp")")
             exit(0)
         } else {
             fail("smoke scenario did not complete in time")
@@ -49,18 +51,21 @@ struct Smoke {
         private var _transportOK: Bool?
         private var _hostVoiceFrames = 0
         private var _joinerVoiceFrames = 0
+        private var _joinerStatusOnHost: PlayerStatus?
         private var _failure: String?
 
         var walked: Bool { lock.withLock { _walked } }
         var transportOK: Bool? { lock.withLock { _transportOK } }
         var hostVoiceFrames: Int { lock.withLock { _hostVoiceFrames } }
         var joinerVoiceFrames: Int { lock.withLock { _joinerVoiceFrames } }
+        var joinerStatusOnHost: PlayerStatus? { lock.withLock { _joinerStatusOnHost } }
         var failure: String? { lock.withLock { _failure } }
 
         func markWalked() { lock.withLock { _walked = true } }
         func markTransport(ok: Bool) { lock.withLock { _transportOK = ok } }
         func addHostVoiceFrame() { lock.withLock { _hostVoiceFrames += 1 } }
         func addJoinerVoiceFrame() { lock.withLock { _joinerVoiceFrames += 1 } }
+        func setJoinerStatusOnHost(_ s: PlayerStatus) { lock.withLock { _joinerStatusOnHost = s } }
         func markFailure(_ reason: String) { lock.withLock { _failure = _failure ?? reason } }
     }
 
@@ -139,6 +144,12 @@ struct Smoke {
                         {
                             results.addHostVoiceFrame()
                         }
+                    case .rosterChanged(let roster):
+                        if let joiner = roster.first(where: {
+                            PlayerWireID.prefix(fromHexID: $0.playerID) == joinerWireID
+                        }) {
+                            results.setJoinerStatusOnHost(joiner.status)
+                        }
                     case .ended(let reason):
                         results.markFailure("host ended: \(reason)")
                         return
@@ -216,6 +227,11 @@ struct Smoke {
                 "smoke: voice frames — host got \(results.hostVoiceFrames), "
                     + "joiner got \(results.joinerVoiceFrames)")
 
+            // Phase: status — joiner goes DND, host's roster must reflect it.
+            await joiner.setStatus(.dnd)
+            let statusOK = await waitUntil { results.joinerStatusOnHost == .dnd }
+            print("smoke: host sees joiner status = \(results.joinerStatusOnHost?.label ?? "nil")")
+
             hostConsumer.cancel()
             joinerConsumer.cancel()
             await joiner.leave()
@@ -229,7 +245,7 @@ struct Smoke {
                 print("smoke: transport mismatch (forceTCP=\(forceTCP))")
                 return false
             }
-            return voiceOK && results.walked
+            return voiceOK && results.walked && statusOK
         } catch {
             print("smoke: error \(error)")
             return false

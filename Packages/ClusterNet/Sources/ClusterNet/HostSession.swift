@@ -59,6 +59,14 @@ public actor HostSession {
     private var knockDecisions: [String: CheckedContinuation<Bool, Never>] = [:]
     private var tasks: [Task<Void, Never>] = []
 
+    // Presence (ADR 0004): user-set status + derived away, keyed by playerID
+    // (host included). `lastActivityAt` advances on movement, voice, or a
+    // status change; the tick turns idle time into the away flag.
+    private var statuses: [String: PlayerStatus] = [:]
+    private var lastActivityAt: [String: ContinuousClock.Instant] = [:]
+    private var awayFlags: [String: Bool] = [:]
+    private let initialStatus: PlayerStatus
+
     public init(
         endpoint: RelayEndpoint,
         identity: PlayerIdentity,
@@ -67,7 +75,8 @@ public actor HostSession {
         hostDisplayName: String,
         hostAvatarPreset: String,
         map: WorldMap,
-        allowUDP: Bool
+        allowUDP: Bool,
+        initialStatus: PlayerStatus = .available
     ) {
         self.endpoint = endpoint
         self.identity = identity
@@ -77,6 +86,7 @@ public actor HostSession {
         self.hostAvatarPreset = hostAvatarPreset
         self.map = map
         self.allowUDP = allowUDP
+        self.initialStatus = initialStatus
         (events, eventsContinuation) = AsyncStream.makeStream()
     }
 
@@ -101,6 +111,8 @@ public actor HostSession {
         }
         sessionCode = code
         world[identity.playerID] = WorldPlayer(position: spawnPosition())
+        statuses[identity.playerID] = initialStatus
+        lastActivityAt[identity.playerID] = .now
         eventsContinuation.yield(.registered(code: code))
         eventsContinuation.yield(.rosterChanged(currentRoster()))
         startPings(on: control)
@@ -131,6 +143,14 @@ public actor HostSession {
     public func updateLocalPlayer(position: Vec2, facing: Facing, isMoving: Bool) {
         world[identity.playerID] = WorldPlayer(
             position: position, facing: facing, isMoving: isMoving, lastInputAt: nil)
+        if isMoving { lastActivityAt[identity.playerID] = .now }
+    }
+
+    /// The host changes its own status (UI hotkey / picker).
+    public func setLocalStatus(_ status: PlayerStatus) async {
+        statuses[identity.playerID] = status
+        lastActivityAt[identity.playerID] = .now
+        await broadcastRoster()
     }
 
     private func spawnPosition() -> Vec2 {
@@ -202,6 +222,10 @@ public actor HostSession {
         let snapshot = WorldSnapshot(tick: tick, players: players)
         eventsContinuation.yield(.worldSnapshot(snapshot))
 
+        if recomputeAway() {
+            await broadcastRoster()
+        }
+
         guard !members.isEmpty, let bytes = try? WorldPayload.snapshot(snapshot).encoded() else {
             return
         }
@@ -235,6 +259,30 @@ public actor HostSession {
         player.isMoving = frame.input.isMoving
         player.lastInputAt = now
         world[playerID] = player
+        if frame.input.isMoving { lastActivityAt[playerID] = now }
+    }
+
+    /// Returns true when any online player's away flag flipped. Cheap; runs
+    /// every tick but only triggers a roster broadcast on a real change.
+    private func recomputeAway() -> Bool {
+        let now = ContinuousClock.now
+        var changed = false
+        let onlineIDs = [identity.playerID] + Array(members.keys)
+        for id in onlineIDs {
+            let idle: Double
+            if let last = lastActivityAt[id] {
+                let elapsed = (now - last).components
+                idle = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+            } else {
+                idle = 0
+            }
+            let away = PresenceRules.isAway(idleSeconds: idle)
+            if (awayFlags[id] ?? false) != away {
+                awayFlags[id] = away
+                changed = true
+            }
+        }
+        return changed
     }
 
     // MARK: Serving a joiner
@@ -329,6 +377,9 @@ public actor HostSession {
                 sendCipher: sendCipher
             )
             world[playerID] = WorldPlayer(position: spawnPosition())
+            statuses[playerID] = known?.status ?? .available
+            lastActivityAt[playerID] = .now
+            awayFlags[playerID] = false
 
             // Host side of the datagram plane: bind regardless of the joiner's
             // eventual choice — it's their call which road they use (ADR 0002).
@@ -373,6 +424,11 @@ public actor HostSession {
                         member.wantsUDP = useUDP && member.datagram != nil
                         members[playerID] = member
                     }
+                case .setStatus(let status):
+                    statuses[playerID] = status
+                    lastActivityAt[playerID] = .now
+                    try? directory.saveStatus(id: playerID, status: status)
+                    await broadcastRoster()
                 default:
                     break
                 }
@@ -414,7 +470,11 @@ public actor HostSession {
     /// speakerID is set from the *verified* pair identity — no spoofing — and
     /// the payload is never decoded here, only re-sealed per pair.
     private func fanOutVoice(fromPlayerID: String, seq: UInt32, opus: Data) async {
+        // DND speaker: their client should already be muted, but a misbehaving
+        // client mustn't be able to leak audio (ADR 0004, defense in depth).
+        guard statuses[fromPlayerID] != .dnd else { return }
         guard let speakerPosition = world[fromPlayerID]?.position else { return }
+        lastActivityAt[fromPlayerID] = .now
         let speakerWireID = PlayerWireID.prefix(fromHexID: fromPlayerID)
         guard
             let bytes = try? WorldPayload.voice(speakerID: speakerWireID, seq: seq, opus: opus)
@@ -422,7 +482,8 @@ public actor HostSession {
         else { return }
 
         for (memberID, member) in members where memberID != fromPlayerID {
-            guard let listenerPosition = world[memberID]?.position,
+            guard statuses[memberID] != .dnd,  // DND listener hears nothing
+                let listenerPosition = world[memberID]?.position,
                 ProximityRules.standard.isAudible(
                     atDistance: speakerPosition.distance(to: listenerPosition))
             else { continue }
@@ -433,8 +494,9 @@ public actor HostSession {
             }
         }
 
-        // The host listens too.
+        // The host listens too — unless the host is DND.
         if fromPlayerID != identity.playerID,
+            statuses[identity.playerID] != .dnd,
             let hostPosition = world[identity.playerID]?.position,
             ProximityRules.standard.isAudible(
                 atDistance: speakerPosition.distance(to: hostPosition))
@@ -446,6 +508,9 @@ public actor HostSession {
     private func removeMember(_ playerID: String) async {
         guard let member = members.removeValue(forKey: playerID) else { return }
         world.removeValue(forKey: playerID)
+        statuses.removeValue(forKey: playerID)
+        lastActivityAt.removeValue(forKey: playerID)
+        awayFlags.removeValue(forKey: playerID)
         await member.datagram?.cancel()
         await member.tunnel.cancel()
         try? directory.markLeft(id: playerID)
@@ -454,11 +519,36 @@ public actor HostSession {
 
     // MARK: Roster
 
+    /// Live online members (with current status/away) merged with the offline
+    /// known players from the database (ADR 0004). Pure ordering in RosterBuilder.
     private func currentRoster() -> [RosterEntry] {
-        let host = RosterEntry(
-            playerID: identity.playerID, displayName: hostDisplayName,
-            avatarPreset: hostAvatarPreset, isOnline: true)
-        return [host] + members.values.map(\.entry).sorted { $0.displayName < $1.displayName }
+        var online: [RosterEntry] = [
+            RosterEntry(
+                playerID: identity.playerID, displayName: hostDisplayName,
+                avatarPreset: hostAvatarPreset, isOnline: true,
+                status: statuses[identity.playerID] ?? .available,
+                isAway: awayFlags[identity.playerID] ?? false)
+        ]
+        for (id, member) in members {
+            online.append(
+                RosterEntry(
+                    playerID: id, displayName: member.entry.displayName,
+                    avatarPreset: member.entry.avatarPreset, isOnline: true,
+                    status: statuses[id] ?? .available, isAway: awayFlags[id] ?? false))
+        }
+
+        let onlineIDs = Set(online.map(\.playerID))
+        var offline: [RosterEntry] = []
+        if let known = try? directory.allKnownPlayers() {
+            for (id, info) in known where !onlineIDs.contains(id) {
+                offline.append(
+                    RosterEntry(
+                        playerID: id, displayName: info.displayName,
+                        avatarPreset: info.avatarPreset, isOnline: false,
+                        status: info.status, isAway: false, lastSeenEpoch: info.lastSeenEpoch))
+            }
+        }
+        return RosterBuilder.build(online: online, offline: offline)
     }
 
     private func sendMessage(_ message: SessionMessage, to playerID: String) async throws {

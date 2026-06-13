@@ -33,9 +33,16 @@ final class WorldScene: SKScene {
     private var lastUpdateTime: TimeInterval = 0
     private var emitAccumulator: TimeInterval = 0
 
+    struct RosterMeta {
+        var name: String
+        var preset: String
+        var status: PlayerStatus
+        var isAway: Bool
+    }
+
     private var interpolators: [UInt64: RemotePlayerInterpolator] = [:]
     private var remoteNodes: [UInt64: AvatarNode] = [:]
-    private var rosterMeta: [UInt64: (name: String, preset: String)] = [:]
+    private var rosterMeta: [UInt64: RosterMeta] = [:]
     private let cameraNode = SKCameraNode()
 
     init(map: WorldMap, localWireID: UInt64, localDisplayName: String, localPreset: String) {
@@ -79,12 +86,25 @@ final class WorldScene: SKScene {
     func applyRoster(_ roster: [RosterEntry]) {
         rosterMeta = Dictionary(
             uniqueKeysWithValues: roster.map {
-                (PlayerWireID.prefix(fromHexID: $0.playerID), ($0.displayName, $0.avatarPreset))
+                (
+                    PlayerWireID.prefix(fromHexID: $0.playerID),
+                    RosterMeta(
+                        name: $0.displayName, preset: $0.avatarPreset,
+                        status: $0.status, isAway: $0.isAway)
+                )
             })
-        for (id, node) in remoteNodes where rosterMeta[id] == nil {
+        // Online players still have a world presence; offline ones drop their
+        // node. We only remove nodes for ids no longer in the roster at all.
+        let onlineIDs = Set(
+            roster.filter(\.isOnline).map { PlayerWireID.prefix(fromHexID: $0.playerID) })
+        for (id, node) in remoteNodes where !onlineIDs.contains(id) {
             node.removeFromParent()
             remoteNodes.removeValue(forKey: id)
             interpolators.removeValue(forKey: id)
+        }
+        // Local presence badge (focus/dnd/away) reflects my own roster row.
+        if let mine = rosterMeta[localWireID] {
+            localNode?.setStatus(mine.status, away: mine.isAway)
         }
     }
 
@@ -130,6 +150,9 @@ final class WorldScene: SKScene {
                 point: Self.point(forTile: position), facing: localFacing,
                 moving: currentInput.isMoving,
                 texture: avatarTexture(preset: localPreset, facing: localFacing))
+            if let mine = rosterMeta[localWireID] {
+                node.setStatus(mine.status, away: mine.isAway)
+            }
 
             let target = Self.point(forTile: position)
             cameraNode.position = CGPoint(
@@ -162,6 +185,7 @@ final class WorldScene: SKScene {
                 point: Self.point(forTile: sample.position), facing: sample.facing,
                 moving: sample.isMoving,
                 texture: avatarTexture(preset: meta?.preset ?? "default", facing: sample.facing))
+            node.setStatus(meta?.status ?? .available, away: meta?.isAway ?? false)
         }
     }
 
@@ -246,12 +270,21 @@ final class AvatarNode: SKNode {
     private let body: SKSpriteNode
     private let nameplate: SKLabelNode
     private let speakingRing: SKShapeNode
+    private let statusBadge: SKShapeNode
 
     init(displayName: String) {
         body = SKSpriteNode(color: .systemTeal, size: CGSize(width: 32, height: 32))
         nameplate = SKLabelNode(text: displayName)
         speakingRing = SKShapeNode(circleOfRadius: 19)
+        statusBadge = SKShapeNode(circleOfRadius: 4)
         super.init()
+
+        statusBadge.position = CGPoint(x: 11, y: 13)
+        statusBadge.strokeColor = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.5)
+        statusBadge.lineWidth = 1
+        statusBadge.zPosition = 12
+        statusBadge.isHidden = true
+        addChild(statusBadge)
 
         speakingRing.strokeColor = NSColor(srgbRed: 0.35, green: 0.95, blue: 0.55, alpha: 0.95)
         speakingRing.lineWidth = 2.5
@@ -287,6 +320,21 @@ final class AvatarNode: SKNode {
 
     func setSpeaking(_ speaking: Bool) {
         speakingRing.isHidden = !speaking
+    }
+
+    func setStatus(_ status: PlayerStatus, away: Bool) {
+        switch status {
+        case .available:
+            statusBadge.isHidden = true
+        case .focus:
+            statusBadge.isHidden = false
+            statusBadge.fillColor = NSColor(srgbRed: 0.95, green: 0.78, blue: 0.3, alpha: 1)
+        case .dnd:
+            statusBadge.isHidden = false
+            statusBadge.fillColor = NSColor(srgbRed: 0.9, green: 0.3, blue: 0.3, alpha: 1)
+        }
+        // Away dims the whole avatar (PLAN §9).
+        alpha = away ? 0.45 : 1.0
     }
 
     func apply(point: CGPoint, facing: Facing, moving: Bool, texture: SKTexture?) {

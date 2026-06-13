@@ -81,8 +81,12 @@ import Testing
 
     @Test func rosterMessagesRoundTrip() throws {
         let roster = [
-            RosterEntry(playerID: "aa11", displayName: "Ricardo", avatarPreset: "default", isOnline: true),
-            RosterEntry(playerID: "bb22", displayName: "Dana", avatarPreset: "kart-red", isOnline: false),
+            RosterEntry(
+                playerID: "aa11", displayName: "Ricardo", avatarPreset: "default", isOnline: true,
+                status: .focus, isAway: true, lastSeenEpoch: 0),
+            RosterEntry(
+                playerID: "bb22", displayName: "Dana", avatarPreset: "kart-red", isOnline: false,
+                status: .dnd, isAway: false, lastSeenEpoch: 1_750_000_000),
         ]
         let welcome = SessionMessage.welcome(
             spaceName: "The Mansion", mapVersion: "abc123", hostAllowsUDP: true, roster: roster)
@@ -103,5 +107,9 @@ import Testing
         #expect(try SessionMessage(decoding: frame.encoded()) == frame)
         let selected = SessionMessage.transportSelected(useUDP: false)
         #expect(try SessionMessage(decoding: selected.encoded()) == selected)
+        for status in PlayerStatus.allCases {
+            let message = SessionMessage.setStatus(status)
+            #expect(try SessionMessage(decoding: message.encoded()) == message)
+        }
     }
 }

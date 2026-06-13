@@ -120,4 +120,19 @@ public final class WorldDatabase: Sendable {
             try PlayerRecord.fetchCount(db)
         }
     }
+
+    public func allPlayers() throws -> [PlayerRecord] {
+        try dbQueue.read { db in
+            try PlayerRecord.fetchAll(db)
+        }
+    }
+
+    public func setStatus(publicKey: String, statusPreference: String) throws {
+        try dbQueue.write { db in
+            if var player = try PlayerRecord.fetchOne(db, key: publicKey) {
+                player.statusPreference = statusPreference
+                try player.update(db)
+            }
+        }
+    }
 }

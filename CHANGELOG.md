@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0 — Phase 4: Status & presence (2026-06-13)
+
+- User-set status — Available / Focus / Do Not Disturb — set from an in-world
+  picker or hotkeys (⌃1/⌃2/⌃3), persisted across sessions, shown as a badge on
+  your avatar and in the roster.
+- Derived presence: online / away / offline. The host turns idle time (no
+  movement or voice for 5 min) into an "away" flag and dims the avatar; offline
+  players appear from the database with "last seen" (ADR 0004).
+- Roster sidebar: everyone the world has ever met — online (active before away)
+  before offline-by-recency — with status, away, and last-seen. Toggle in the HUD.
+- DND mutes voice both ways: the client force-mutes the mic and the host drops a
+  DND speaker and skips a DND listener in the fan-out (defense in depth).
+- Status persists in the world database and rides the roster on the wire
+  (wire version → 3); a new setStatus message carries changes host-ward.
+- The end-to-end smoke now also flips the joiner to DND and asserts the host's
+  roster reflects it, on both transports.
+
 ## 0.5.0 — Phase 3 (part 2): Voice finishing pass (2026-06-13)
 
 - Push-to-talk: hold ⌥ Option to transmit (a modifier never collides with

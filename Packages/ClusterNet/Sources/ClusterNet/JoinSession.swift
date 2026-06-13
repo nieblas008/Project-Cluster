@@ -32,6 +32,8 @@ public actor JoinSession {
     private let mapHash: String
     /// False when Settings → Connection forces TCP (ADR 0002).
     private let preferUDP: Bool
+    /// Status sent to the host immediately after welcome (ADR 0004).
+    private let initialStatus: PlayerStatus
 
     private var connection: FrameConnection?
     private var sendCipher: SecureChannelCipher?
@@ -43,7 +45,7 @@ public actor JoinSession {
     public init(
         endpoint: RelayEndpoint, identity: PlayerIdentity,
         displayName: String, avatarPreset: String,
-        mapHash: String, preferUDP: Bool
+        mapHash: String, preferUDP: Bool, initialStatus: PlayerStatus = .available
     ) {
         self.endpoint = endpoint
         self.identity = identity
@@ -51,7 +53,13 @@ public actor JoinSession {
         self.avatarPreset = avatarPreset
         self.mapHash = mapHash
         self.preferUDP = preferUDP
+        self.initialStatus = initialStatus
         (events, eventsContinuation) = AsyncStream.makeStream()
+    }
+
+    /// Change my status; the host persists it and rebroadcasts the roster.
+    public func setStatus(_ status: PlayerStatus) async {
+        await sendSealed(.setStatus(status))
     }
 
     public func start(code rawCode: String) async {
@@ -171,6 +179,9 @@ public actor JoinSession {
                         return
                     }
                     eventsContinuation.yield(.welcomed(spaceName: spaceName, roster: roster))
+                    if initialStatus != .available {
+                        await sendSealed(.setStatus(initialStatus))
+                    }
                     await negotiateTransport(hostAllowsUDP: hostAllowsUDP, flowInfo: flowInfo, keys: keys)
                 case .rosterUpdate(let roster):
                     eventsContinuation.yield(.rosterChanged(roster))
@@ -182,7 +193,7 @@ public actor JoinSession {
                 case .leave:
                     eventsContinuation.yield(.ended(reason: "The host ended the session."))
                     return
-                case .joinHello, .transportSelected:
+                case .joinHello, .transportSelected, .setStatus:
                     throw ConnectionError.protocolViolation
                 }
             }

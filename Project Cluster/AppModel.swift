@@ -74,6 +74,12 @@ final class AppModel {
         didSet { UserDefaults.standard.set(pushToTalk, forKey: "pushToTalk") }
     }
 
+    /// My user-set status (available/focus/dnd), persisted; sent to the host on
+    /// join and pushed live when changed in-world (ADR 0004).
+    var myStatus: PlayerStatus {
+        didSet { UserDefaults.standard.set(Int(myStatus.rawValue), forKey: "myStatus") }
+    }
+
     /// The bundled mansion, loaded once.
     private(set) var worldMap: WorldMap?
     private(set) var worldMapError: String?
@@ -107,6 +113,8 @@ final class AppModel {
         self.relayFingerprint = defaults.string(forKey: "relayFingerprint") ?? ""
         self.transportMode = defaults.string(forKey: "transportMode") ?? "auto"
         self.pushToTalk = defaults.bool(forKey: "pushToTalk")
+        self.myStatus =
+            PlayerStatus(rawValue: UInt8(defaults.integer(forKey: "myStatus"))) ?? .available
         if let url = Bundle.main.url(forResource: "mansion", withExtension: "json") {
             do {
                 self.worldMap = try TiledMapLoader.load(data: try Data(contentsOf: url))

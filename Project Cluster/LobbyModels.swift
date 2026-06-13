@@ -32,16 +32,23 @@ final class HostLobbyModel {
     private var session: HostSession?
     private var eventsTask: Task<Void, Never>?
 
-    func startVoice(localWireID: UInt64, pushToTalk: Bool) {
+    func startVoice(localWireID: UInt64, pushToTalk: Bool, status: PlayerStatus) {
         let session = session
         voice.start(localWireID: localWireID, pushToTalk: pushToTalk) { seq, opus in
             await session?.sendHostVoice(seq: seq, opus: opus)
         }
+        voice.applyStatus(status)
+    }
+
+    func setStatus(_ status: PlayerStatus) {
+        voice.applyStatus(status)
+        let session = session
+        Task { await session?.setLocalStatus(status) }
     }
 
     func start(
         endpoint: RelayEndpoint, identity: PlayerIdentity, displayName: String,
-        avatarPreset: String, map: WorldMap, allowUDP: Bool
+        avatarPreset: String, map: WorldMap, allowUDP: Bool, status: PlayerStatus
     ) {
         guard state == .idle else { return }
         state = .starting
@@ -58,7 +65,8 @@ final class HostLobbyModel {
                     hostDisplayName: displayName,
                     hostAvatarPreset: avatarPreset,
                     map: map,
-                    allowUDP: allowUDP
+                    allowUDP: allowUDP,
+                    initialStatus: status
                 )
                 self.session = session
                 self.consumeEvents(of: session)
@@ -158,16 +166,23 @@ final class JoinLobbyModel {
     private var eventsTask: Task<Void, Never>?
     private var inputSeq: UInt32 = 0
 
-    func startVoice(localWireID: UInt64, pushToTalk: Bool) {
+    func startVoice(localWireID: UInt64, pushToTalk: Bool, status: PlayerStatus) {
         let session = session
         voice.start(localWireID: localWireID, pushToTalk: pushToTalk) { seq, opus in
             await session?.sendVoice(seq: seq, opus: opus)
         }
+        voice.applyStatus(status)
+    }
+
+    func setStatus(_ status: PlayerStatus) {
+        voice.applyStatus(status)
+        let session = session
+        Task { await session?.setStatus(status) }
     }
 
     func join(
         code: String, endpoint: RelayEndpoint, identity: PlayerIdentity, displayName: String,
-        avatarPreset: String, mapHash: String, preferUDP: Bool
+        avatarPreset: String, mapHash: String, preferUDP: Bool, status: PlayerStatus
     ) {
         guard case .idle = state else { return }
         state = .connecting(status: "Connecting…")
@@ -175,7 +190,7 @@ final class JoinLobbyModel {
         let session = JoinSession(
             endpoint: endpoint, identity: identity,
             displayName: displayName, avatarPreset: avatarPreset,
-            mapHash: mapHash, preferUDP: preferUDP)
+            mapHash: mapHash, preferUDP: preferUDP, initialStatus: status)
         self.session = session
         eventsTask = Task {
             for await event in session.events {

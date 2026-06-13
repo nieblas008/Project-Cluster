@@ -71,7 +71,7 @@ struct HostSessionView: View {
                 lobby.start(
                     endpoint: model.relayEndpoint, identity: identity,
                     displayName: model.displayName, avatarPreset: model.avatarPreset,
-                    map: map, allowUDP: model.preferUDP)
+                    map: map, allowUDP: model.preferUDP, status: model.myStatus)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.extraLarge)

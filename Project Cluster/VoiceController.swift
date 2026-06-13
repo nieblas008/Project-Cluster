@@ -23,7 +23,17 @@ final class VoiceController {
     private(set) var stats = VoiceStats()
 
     var micMuted = false {
-        didSet { engine.setMuted(micMuted) }
+        didSet { engine.setMuted(micMuted || statusDND) }
+    }
+
+    /// True while my status is DND — the mic is force-muted on top of any
+    /// manual mute, and the host won't route audio to me (ADR 0004).
+    private(set) var statusDND = false
+
+    /// Apply a status change to the local audio path.
+    func applyStatus(_ status: PlayerStatus) {
+        statusDND = (status == .dnd)
+        engine.setMuted(micMuted || statusDND)
     }
 
     /// Push-to-talk vs open mic (persisted in AppModel, pushed in on start).

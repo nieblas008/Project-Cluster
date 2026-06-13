@@ -1,18 +1,35 @@
 import Foundation
 
-/// One row of the lobby roster as the host broadcasts it.
+/// One row of the lobby/sidebar roster as the host broadcasts it.
 public struct RosterEntry: Equatable, Sendable {
     /// Hex public identity key — stable per player.
     public var playerID: String
     public var displayName: String
     public var avatarPreset: String
     public var isOnline: Bool
+    /// User-set status (available/focus/dnd).
+    public var status: PlayerStatus
+    /// Host-derived auto-away — only meaningful while `isOnline`.
+    public var isAway: Bool
+    /// Unix seconds of last disconnect; 0 when online or never seen.
+    public var lastSeenEpoch: Double
 
-    public init(playerID: String, displayName: String, avatarPreset: String, isOnline: Bool) {
+    public init(
+        playerID: String,
+        displayName: String,
+        avatarPreset: String,
+        isOnline: Bool,
+        status: PlayerStatus = .available,
+        isAway: Bool = false,
+        lastSeenEpoch: Double = 0
+    ) {
         self.playerID = playerID
         self.displayName = displayName
         self.avatarPreset = avatarPreset
         self.isOnline = isOnline
+        self.status = status
+        self.isAway = isAway
+        self.lastSeenEpoch = lastSeenEpoch
     }
 }
 
@@ -40,6 +57,9 @@ public enum SessionMessage: Equatable, Sendable {
     case worldFrame(payload: Data)
     /// Joiner → host after probing its UDP path: which road to use for me.
     case transportSelected(useUDP: Bool)
+    /// Joiner → host: change my status (available/focus/dnd). The host persists
+    /// it and rebroadcasts the roster.
+    case setStatus(PlayerStatus)
 
     private enum Kind: UInt8 {
         case joinHello = 1
@@ -50,6 +70,7 @@ public enum SessionMessage: Equatable, Sendable {
         case leave = 6
         case worldFrame = 7
         case transportSelected = 8
+        case setStatus = 9
     }
 
     public func encoded() throws -> [UInt8] {
@@ -84,6 +105,9 @@ public enum SessionMessage: Equatable, Sendable {
         case .transportSelected(let useUDP):
             w.write(Kind.transportSelected.rawValue)
             w.write(useUDP)
+        case .setStatus(let status):
+            w.write(Kind.setStatus.rawValue)
+            w.write(status.rawValue)
         }
         return w.bytes
     }
@@ -118,6 +142,11 @@ public enum SessionMessage: Equatable, Sendable {
             self = .worldFrame(payload: try r.readData())
         case .transportSelected:
             self = .transportSelected(useUDP: try r.readBool())
+        case .setStatus:
+            guard let status = PlayerStatus(rawValue: try r.readUInt8()) else {
+                throw CodecError.invalidValue
+            }
+            self = .setStatus(status)
         }
     }
 
@@ -129,6 +158,9 @@ public enum SessionMessage: Equatable, Sendable {
             try w.write(entry.displayName)
             try w.write(entry.avatarPreset)
             w.write(entry.isOnline)
+            w.write(entry.status.rawValue)
+            w.write(entry.isAway)
+            w.write(entry.lastSeenEpoch)
         }
     }
 
@@ -137,12 +169,22 @@ public enum SessionMessage: Equatable, Sendable {
         var roster: [RosterEntry] = []
         roster.reserveCapacity(count)
         for _ in 0..<count {
+            let playerID = try r.readString()
+            let displayName = try r.readString()
+            let avatarPreset = try r.readString()
+            let isOnline = try r.readBool()
+            guard let status = PlayerStatus(rawValue: try r.readUInt8()) else {
+                throw CodecError.invalidValue
+            }
             roster.append(
                 RosterEntry(
-                    playerID: try r.readString(),
-                    displayName: try r.readString(),
-                    avatarPreset: try r.readString(),
-                    isOnline: try r.readBool()
+                    playerID: playerID,
+                    displayName: displayName,
+                    avatarPreset: avatarPreset,
+                    isOnline: isOnline,
+                    status: status,
+                    isAway: try r.readBool(),
+                    lastSeenEpoch: try r.readDouble()
                 ))
         }
         return roster

@@ -93,7 +93,7 @@ struct JoinSessionView: View {
         lobby.join(
             code: sessionCode, endpoint: model.relayEndpoint, identity: identity,
             displayName: model.displayName, avatarPreset: model.avatarPreset,
-            mapHash: map.contentHash, preferUDP: model.preferUDP)
+            mapHash: map.contentHash, preferUDP: model.preferUDP, status: model.myStatus)
     }
 }
 

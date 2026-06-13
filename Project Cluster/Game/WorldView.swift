@@ -18,6 +18,8 @@ struct WorldView: View {
     @State private var scene: WorldScene?
     @State private var keys = KeyState()
 
+    @State private var showRoster = true
+
     var body: some View {
         ZStack(alignment: .top) {
             if let scene {
@@ -28,6 +30,13 @@ struct WorldView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             hud
+            if showRoster {
+                RosterSidebar(roster: roster, selfID: model.identity?.playerID)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(.top, 56)
+                    .padding(.trailing, 12)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .onAppear(perform: enterWorld)
         .onDisappear(perform: leaveWorldUI)
@@ -38,6 +47,55 @@ struct WorldView: View {
         case .host: model.hostLobby.voice
         case .join: model.joinLobby.voice
         }
+    }
+
+    private var roster: [RosterEntry] {
+        switch mode {
+        case .host: model.hostLobby.roster
+        case .join: model.joinLobby.roster
+        }
+    }
+
+    private func changeStatus(_ status: PlayerStatus) {
+        model.myStatus = status
+        switch mode {
+        case .host: model.hostLobby.setStatus(status)
+        case .join: model.joinLobby.setStatus(status)
+        }
+    }
+
+    /// Status picker with hotkeys (⌃1/⌃2/⌃3). The current status shows on the chip.
+    @ViewBuilder
+    private var statusControl: some View {
+        Menu {
+            Button {
+                changeStatus(.available)
+            } label: {
+                Label("Available", systemImage: "circle.fill")
+            }
+            .keyboardShortcut("1", modifiers: .control)
+            Button {
+                changeStatus(.focus)
+            } label: {
+                Label("Focus", systemImage: "moon.fill")
+            }
+            .keyboardShortcut("2", modifiers: .control)
+            Button {
+                changeStatus(.dnd)
+            } label: {
+                Label("Do Not Disturb", systemImage: "minus.circle.fill")
+            }
+            .keyboardShortcut("3", modifiers: .control)
+        } label: {
+            HStack(spacing: 5) {
+                Circle().fill(StatusStyle.color(model.myStatus)).frame(width: 8, height: 8)
+                Text(model.myStatus.label)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .hudChip()
+        .help("Set your status (⌃1 Available · ⌃2 Focus · ⌃3 Do Not Disturb)")
     }
 
     @ViewBuilder
@@ -121,10 +179,22 @@ struct WorldView: View {
         }
     }
 
+    private var rosterToggle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { showRoster.toggle() }
+        } label: {
+            Label("\(roster.filter(\.isOnline).count)", systemImage: "person.2.fill")
+        }
+        .buttonStyle(.borderless)
+        .hudChip()
+        .help("Toggle the roster")
+    }
+
     @ViewBuilder
     private var hud: some View {
         HStack(spacing: 12) {
             micControls
+            statusControl
             switch mode {
             case .host:
                 if case .hosting(let code) = model.hostLobby.state {
@@ -143,8 +213,7 @@ struct WorldView: View {
                     .padding(.vertical, 6)
                     .background(.black.opacity(0.5), in: Capsule())
                 }
-                Text("\(model.hostLobby.roster.count) here")
-                    .hudChip()
+                rosterToggle
                 if !model.hostLobby.knocks.isEmpty {
                     Button {
                         model.hostLobby.inWorld = false  // knocks live in the lobby screen
@@ -173,7 +242,7 @@ struct WorldView: View {
                         )
                 }
                 qualityIndicator
-                Text("\(model.joinLobby.roster.count) here").hudChip()
+                rosterToggle
                 Spacer()
                 Button("Leave") { model.joinLobby.leave() }
                     .hudChip()
@@ -196,11 +265,13 @@ struct WorldView: View {
         case .host:
             newScene.worldDelegate = model.hostLobby
             model.hostLobby.scene = newScene
-            model.hostLobby.startVoice(localWireID: wireID, pushToTalk: model.pushToTalk)
+            model.hostLobby.startVoice(
+                localWireID: wireID, pushToTalk: model.pushToTalk, status: model.myStatus)
         case .join:
             newScene.worldDelegate = model.joinLobby
             model.joinLobby.scene = newScene
-            model.joinLobby.startVoice(localWireID: wireID, pushToTalk: model.pushToTalk)
+            model.joinLobby.startVoice(
+                localWireID: wireID, pushToTalk: model.pushToTalk, status: model.myStatus)
         }
         scene = newScene
         keys.install(
@@ -225,6 +296,103 @@ extension View {
         padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(.black.opacity(0.5), in: Capsule())
+    }
+}
+
+enum StatusStyle {
+    static func color(_ status: PlayerStatus) -> Color {
+        switch status {
+        case .available: .green
+        case .focus: .yellow
+        case .dnd: .red
+        }
+    }
+
+    static func icon(_ status: PlayerStatus) -> String {
+        switch status {
+        case .available: "circle.fill"
+        case .focus: "moon.fill"
+        case .dnd: "minus.circle.fill"
+        }
+    }
+}
+
+/// The presence panel: everyone the world knows, online (active before away)
+/// before offline, with status, away, and last-seen (PLAN §9, ADR 0004).
+struct RosterSidebar: View {
+    let roster: [RosterEntry]
+    let selfID: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("People")
+                .font(.headline)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            Divider().background(.white.opacity(0.15))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(roster, id: \.playerID) { entry in
+                        row(entry)
+                    }
+                }
+                .padding(6)
+            }
+        }
+        .foregroundStyle(.white)
+        .frame(width: 220)
+        .frame(maxHeight: 420)
+        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    @ViewBuilder
+    private func row(_ entry: RosterEntry) -> some View {
+        HStack(spacing: 8) {
+            ZStack(alignment: .bottomTrailing) {
+                Circle()
+                    .fill(AvatarPalette.color(for: entry.avatarPreset))
+                    .frame(width: 18, height: 18)
+                    .opacity(entry.isOnline ? 1 : 0.4)
+                Image(systemName: StatusStyle.icon(entry.status))
+                    .font(.system(size: 7))
+                    .foregroundStyle(StatusStyle.color(entry.status))
+                    .background(Circle().fill(.black).frame(width: 9, height: 9))
+                    .opacity(entry.isOnline ? 1 : 0)
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(entry.displayName)
+                        .font(.callout)
+                        .opacity(entry.isOnline ? 1 : 0.55)
+                    if entry.playerID == selfID {
+                        Text("you").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                Text(subtitle(entry))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+    }
+
+    private func subtitle(_ entry: RosterEntry) -> String {
+        if !entry.isOnline {
+            return entry.lastSeenEpoch > 0 ? "last seen \(Self.ago(entry.lastSeenEpoch))" : "offline"
+        }
+        if entry.isAway { return "away" }
+        return entry.status.label
+    }
+
+    static func ago(_ epoch: Double) -> String {
+        let seconds = max(0, Date().timeIntervalSince1970 - epoch)
+        if seconds < 90 { return "just now" }
+        if seconds < 3600 { return "\(Int(seconds / 60))m ago" }
+        if seconds < 86400 { return "\(Int(seconds / 3600))h ago" }
+        return "\(Int(seconds / 86400))d ago"
     }
 }
 
