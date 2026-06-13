@@ -133,21 +133,22 @@ final class VoiceController {
         noteSpeaking(speakerID)
     }
 
-    /// Each snapshot: distance → gain per remote speaker (PLAN §8 curve), and
-    /// the arrival cadence drives the connection-quality read.
+    /// Each snapshot: distance → gain per remote speaker (PLAN §8 curve), the
+    /// arrival cadence drives the connection-quality read, and departed players
+    /// (absent from the snapshot) have their audio pipelines reclaimed.
     func updateProximity(snapshot: WorldSnapshot) {
         qualityEstimator.recordArrival(at: CACurrentMediaTimeShim())
+
+        let remoteIDs = Set(snapshot.players.map(\.id)).subtracting([localWireID])
+        engine.retainSpeakers(remoteIDs)
+        lastFrameAt = lastFrameAt.filter { remoteIDs.contains($0.key) || $0.key == localWireID }
+
         guard let me = snapshot.players.first(where: { $0.id == localWireID }) else { return }
         for player in snapshot.players where player.id != localWireID {
             let gain = ProximityRules.standard.gain(
                 atDistance: me.position.distance(to: player.position))
             engine.setVolume(speakerID: player.id, Float(gain))
         }
-    }
-
-    func speakerLeft(_ wireID: UInt64) {
-        engine.removeSpeaker(wireID)
-        lastFrameAt.removeValue(forKey: wireID)
     }
 
     private func noteSpeaking(_ id: UInt64) {

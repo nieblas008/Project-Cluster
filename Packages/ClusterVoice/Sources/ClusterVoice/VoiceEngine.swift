@@ -240,6 +240,21 @@ public final class VoiceEngine: @unchecked Sendable {
         }
     }
 
+    /// Tears down pipelines for speakers no longer present (left the session),
+    /// keyed off the authoritative snapshot's player set. Players who merely
+    /// walked out of earshot stay in the snapshot, so their idle pipeline is
+    /// retained and resumes when they return.
+    public func retainSpeakers(_ ids: Set<UInt64>) {
+        queue.async {
+            for key in self.pipelines.keys where !ids.contains(key) {
+                if let pipeline = self.pipelines.removeValue(forKey: key) {
+                    pipeline.player.stop()
+                    self.engine.detach(pipeline.player)
+                }
+            }
+        }
+    }
+
     private func startPlayoutTimer() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(
