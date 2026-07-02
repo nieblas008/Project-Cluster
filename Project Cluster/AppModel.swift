@@ -131,6 +131,21 @@ final class AppModel {
         }
     }
 
+    /// Replaces this Mac's identity with an exported key file (Phase 7).
+    func importIdentity(from url: URL) -> String {
+        do {
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            let data = try Data(contentsOf: url)
+            let store = KeychainSecretStore(
+                account: Self.launchProfile.map { "primary-\($0)" } ?? "primary")
+            identity = try IdentityManager.importIdentity(data: data, store: store)
+            return "Identity imported — you are now \(identity?.shortID ?? "?")."
+        } catch {
+            return "Import failed: not a valid identity file."
+        }
+    }
+
     func runDoctor() {
         doctorRunning = true
         doctorChecks = []

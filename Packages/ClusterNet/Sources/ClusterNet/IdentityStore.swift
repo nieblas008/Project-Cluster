@@ -12,6 +12,15 @@ public enum IdentityError: Error {
     case corruptStoredKey
 }
 
+extension IdentityManager {
+    /// Restores an exported identity (new Mac / reinstall) — Phase 7.
+    public static func importIdentity(data: Data, store: SecretStore) throws -> PlayerIdentity {
+        let identity = try PlayerIdentity(rawPrivateKey: data)
+        try store.save(data)
+        return identity
+    }
+}
+
 public enum IdentityManager {
     /// Loads the existing identity or creates and persists a fresh one.
     /// Called once at app launch; the resulting ID is stable for this Mac forever.

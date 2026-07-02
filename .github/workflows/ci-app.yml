@@ -47,3 +47,8 @@ jobs:
       # → handshake → roster. The Phase 1 exit criterion, minus the internet.
       - name: End-to-end smoke (relay + host + joiner)
         run: scripts/itest-phase1.sh
+
+      # Phase 7: wifi drop, host crash, rehost persistence, kick — all must
+      # degrade cleanly.
+      - name: Chaos drills
+        run: scripts/itest-chaos.sh

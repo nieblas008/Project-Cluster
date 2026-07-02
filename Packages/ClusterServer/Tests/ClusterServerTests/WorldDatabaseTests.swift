@@ -99,4 +99,27 @@ import Testing
         // Limit respected.
         #expect(try db.bestLapTimes(limit: 1).count == 1)
     }
+
+    @Test func exportedCopyOpensIntact() throws {
+        // The restore drill in file form: copy the file, open the copy,
+        // everything is there (docs/runbooks/restore.md).
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let original = dir.appendingPathComponent("world.sqlite")
+        let backup = dir.appendingPathComponent("backup.sqlite")
+
+        let db = try WorldDatabase(fileURL: original)
+        _ = try db.ensureSpace(named: "The Mansion")
+        try db.upsertPlayer(
+            PlayerRecord(publicKey: "aa", displayName: "Ricardo", isApproved: true))
+        try db.setDeskClaim(zone: "desk-01", ownerID: "aa")
+        try db.insertLapTime(playerID: "aa", displayName: "Ricardo", timeMs: 42_000)
+
+        try FileManager.default.copyItem(at: original, to: backup)
+        let restored = try WorldDatabase(fileURL: backup)
+        #expect(try restored.fetchPlayer(publicKey: "aa")?.displayName == "Ricardo")
+        #expect(try restored.allDeskClaims().map(\.zone) == ["desk-01"])
+        #expect(try restored.bestLap(playerID: "aa") == 42_000)
+        try? FileManager.default.removeItem(at: dir)
+    }
 }

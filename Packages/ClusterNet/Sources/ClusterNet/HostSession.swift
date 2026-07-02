@@ -172,6 +172,34 @@ public actor HostSession {
         knockDecisions.removeValue(forKey: playerID)?.resume(returning: approve)
     }
 
+    /// Remove a member; optionally blocklist their identity (Phase 7). A
+    /// blocked identity is refused at the door on every future knock.
+    public func kick(playerID: String, block: Bool) async {
+        guard playerID != identity.playerID, members[playerID] != nil else { return }
+        if block {
+            try? directory.setBlocked(id: playerID, blocked: true)
+        }
+        try? await sendMessage(
+            .denied(
+                reason: block
+                    ? "You are blocked from this space." : "Removed by the host."),
+            to: playerID)
+        await removeMember(playerID)
+    }
+
+    /// Chaos-drill hook: vanish without a goodbye — no leave, no events.
+    /// Simulates a force-quit; stores stay intact for a rehost.
+    public func dropAllConnections() async {
+        for task in tasks {
+            task.cancel()
+        }
+        for member in members.values {
+            await member.datagram?.cancel()
+            await member.tunnel.cancel()
+        }
+        await control?.cancel()
+    }
+
     /// The host's own avatar, reported by its scene (~30 Hz). The host is the
     /// authority; its own movement isn't validated, just published — but its
     /// laps go through the same tracker as everyone else's.

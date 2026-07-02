@@ -36,6 +36,10 @@ struct WorldDirectoryAdapter: HostDirectory {
         try database.setStatus(publicKey: id, statusPreference: status.storageKey)
     }
 
+    func setBlocked(id: String, blocked: Bool) throws {
+        try database.setBlocked(publicKey: id, blocked: blocked)
+    }
+
     func markLeft(id: String) throws {
         try database.markSeen(publicKey: id)
     }

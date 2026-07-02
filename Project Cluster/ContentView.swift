@@ -2,7 +2,7 @@ import ClusterNet
 import SwiftUI
 
 struct ContentView: View {
-    @State private var model = AppModel()
+    @Bindable var model: AppModel
 
     var body: some View {
         Group {
@@ -126,5 +126,5 @@ struct WelcomeView: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(model: AppModel())
 }

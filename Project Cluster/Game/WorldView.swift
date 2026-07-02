@@ -33,11 +33,19 @@ struct WorldView: View {
             }
             hud
             if showRoster {
-                RosterSidebar(roster: roster, selfID: model.identity?.playerID)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(.top, 56)
-                    .padding(.trailing, 12)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                RosterSidebar(
+                    roster: roster, selfID: model.identity?.playerID,
+                    onKick: mode == .host
+                        ? { entry in model.hostLobby.kick(playerID: entry.playerID, block: false) }
+                        : nil,
+                    onBlock: mode == .host
+                        ? { entry in model.hostLobby.kick(playerID: entry.playerID, block: true) }
+                        : nil
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(.top, 56)
+                .padding(.trailing, 12)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
             if showLeaderboard {
                 LeaderboardPanel(leaderboard: raceStateForMode.leaderboard)
@@ -555,6 +563,9 @@ enum StatusStyle {
 struct RosterSidebar: View {
     let roster: [RosterEntry]
     let selfID: String?
+    /// Host-only moderation (Phase 7); nil for joiners.
+    var onKick: ((RosterEntry) -> Void)?
+    var onBlock: ((RosterEntry) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -610,6 +621,14 @@ struct RosterSidebar: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
+        .contextMenu {
+            if entry.playerID != selfID, entry.isOnline, let onKick {
+                Button("Kick \(entry.displayName)") { onKick(entry) }
+            }
+            if entry.playerID != selfID, let onBlock {
+                Button("Block \(entry.displayName)", role: .destructive) { onBlock(entry) }
+            }
+        }
     }
 
     private func subtitle(_ entry: RosterEntry) -> String {

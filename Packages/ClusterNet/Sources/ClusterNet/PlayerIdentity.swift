@@ -8,12 +8,26 @@ import Foundation
 public struct PlayerIdentity: Sendable {
     public let privateKey: Curve25519.Signing.PrivateKey
 
+    /// Rebuilds an identity from exported key material; throws on garbage.
+    public init(rawPrivateKey: Data) throws {
+        guard let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: rawPrivateKey) else {
+            throw IdentityError.corruptStoredKey
+        }
+        self.init(privateKey: key)
+    }
+
     public init(privateKey: Curve25519.Signing.PrivateKey) {
         self.privateKey = privateKey
     }
 
     public static func generate() -> PlayerIdentity {
         PlayerIdentity(privateKey: Curve25519.Signing.PrivateKey())
+    }
+
+    /// The raw private key, for the Settings export (Phase 7). Whoever holds
+    /// this IS this player — the UI says so in red.
+    public var exportedPrivateKey: Data {
+        privateKey.rawRepresentation
     }
 
     public var publicKeyData: Data {

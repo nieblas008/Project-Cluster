@@ -39,6 +39,8 @@ public protocol HostDirectory: Sendable {
     func recordJoin(id: String, displayName: String, avatarPreset: String) throws
     /// Persist a status preference so it survives across sessions.
     func saveStatus(id: String, status: PlayerStatus) throws
+    /// Blocklist (Phase 7): a blocked identity is refused at the door.
+    func setBlocked(id: String, blocked: Bool) throws
     func markLeft(id: String) throws
 }
 
@@ -77,6 +79,15 @@ public final class InMemoryDirectory: HostDirectory, @unchecked Sendable {
         lock.withLock {
             if var player = players[id] {
                 player.status = status
+                players[id] = player
+            }
+        }
+    }
+
+    public func setBlocked(id: String, blocked: Bool) throws {
+        lock.withLock {
+            if var player = players[id] {
+                player.isBlocked = blocked
                 players[id] = player
             }
         }

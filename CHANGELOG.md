@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.0 — Phase 7: The rock-solid pass (2026-07-02)
+
+- Chaos drills, automated and in CI: a member's wifi drop removes them cleanly
+  and auto-parks their kart; a host crash ends every joiner without a hang;
+  rehosting with the same world brings desks/laps/approvals back; kick delivers
+  its reason. All four run against a real relay on every push.
+- Menu-bar hosting: close the window and the world stays up — code and roster
+  one click away, Stop Hosting included. The Mac won't idle-sleep while hosting.
+- Moderation: right-click a roster row to Kick or Block (blocklist persists;
+  blocked identities are refused at the door).
+- World & Identity in Settings: export the world file (one SQLite file is the
+  whole world), export/import your identity key to move Macs. Restore drill
+  executed against the real world file: 4.6 s + an app relaunch
+  (docs/runbooks/restore.md).
+- Runbooks: the "bad wifi Friday" checklist, incident quick-reference, and
+  backup/restore — plus scripts/drill-restore.sh and scripts/itest-chaos.sh.
+
+With this, all seven phases of the plan's core scope are complete.
+
 ## 0.8.0 — Phase 6: Go-karts 🏎️ (2026-07-02)
 
 - Four karts wait on the gravel loop's south straight. Walk up, press E, and

@@ -22,9 +22,14 @@ struct Smoke {
             certFingerprint: fingerprint
         )
         let forceTCP = env["CLUSTER_FORCE_TCP"] == "1"
+        let chaos = env["CLUSTER_CHAOS"] == "1"
 
         let outcome = await withTaskGroup(of: Bool.self) { group in
-            group.addTask { await runScenario(endpoint: endpoint, forceTCP: forceTCP) }
+            group.addTask {
+                chaos
+                    ? await runChaos(endpoint: endpoint)
+                    : await runScenario(endpoint: endpoint, forceTCP: forceTCP)
+            }
             group.addTask {
                 try? await Task.sleep(for: .seconds(30))
                 return false
@@ -36,8 +41,10 @@ struct Smoke {
 
         if outcome {
             print(
-                "SMOKE OK — roster, walk, voice, status, desks, and karts all good, "
-                    + "transport=\(forceTCP ? "tcp" : "udp")")
+                chaos
+                    ? "SMOKE OK — chaos drills: wifi drop, host crash, rehost, and kick all clean"
+                    : "SMOKE OK — roster, walk, voice, status, desks, and karts all good, "
+                        + "transport=\(forceTCP ? "tcp" : "udp")")
             exit(0)
         } else {
             fail("smoke scenario did not complete in time")
@@ -325,6 +332,183 @@ struct Smoke {
                 && kartFreeOK
         } catch {
             print("smoke: error \(error)")
+            return false
+        }
+    }
+
+    /// Phase 7 chaos drills (ADR/PLAN §14): the app must degrade CLEANLY.
+    /// 1. A joiner vanishes mid-drive → host drops them, kart auto-parks.
+    /// 2. The host vanishes → remaining joiners end cleanly, no hang.
+    /// 3. A rehost with the same stores → desks survive the "restart".
+    /// 4. Kick → the kicked member is told why.
+    static func runChaos(endpoint: RelayEndpoint) async -> Bool {
+        final class Chaos: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _host1Roster = 0
+            private var _kartFree = false
+            private var _joiner2Ended = false
+            private var _joiner3Welcomed = false
+            private var _joiner3DeskIntact = false
+            private var _joiner3Kicked = false
+            var host1Roster: Int { lock.withLock { _host1Roster } }
+            var kartFree: Bool { lock.withLock { _kartFree } }
+            var joiner2Ended: Bool { lock.withLock { _joiner2Ended } }
+            var joiner3Welcomed: Bool { lock.withLock { _joiner3Welcomed } }
+            var joiner3DeskIntact: Bool { lock.withLock { _joiner3DeskIntact } }
+            var joiner3Kicked: Bool { lock.withLock { _joiner3Kicked } }
+            func setRoster(_ n: Int) { lock.withLock { _host1Roster = n } }
+            func setKartFree(_ v: Bool) { lock.withLock { _kartFree = v } }
+            func setJoiner2Ended() { lock.withLock { _joiner2Ended = true } }
+            func setJoiner3Welcomed() { lock.withLock { _joiner3Welcomed = true } }
+            func setJoiner3DeskIntact() { lock.withLock { _joiner3DeskIntact = true } }
+            func setJoiner3Kicked() { lock.withLock { _joiner3Kicked = true } }
+        }
+
+        do {
+            let map = testMap()
+            let chaos = Chaos()
+            let hostIdentity = try IdentityManager.loadOrCreate(store: InMemorySecretStore())
+            let joinerIdentity = try IdentityManager.loadOrCreate(store: InMemorySecretStore())
+            // Shared stores: the whole point of drill 3 is that these outlive host1.
+            let directory = InMemoryDirectory(autoApprove: true)
+            let deskStore = InMemoryDeskStore()
+            let lapStore = InMemoryLapStore()
+
+            func makeHost() -> HostSession {
+                HostSession(
+                    endpoint: endpoint, identity: hostIdentity, directory: directory,
+                    spaceName: "Chaos Mansion", hostDisplayName: "Hostie",
+                    hostAvatarPreset: "default", map: map, allowUDP: true,
+                    deskStore: deskStore, lapStore: lapStore)
+            }
+            func makeJoiner() -> JoinSession {
+                JoinSession(
+                    endpoint: endpoint, identity: joinerIdentity, displayName: "Smokey",
+                    avatarPreset: "default", mapHash: map.contentHash, preferUDP: true)
+            }
+
+            // ---- Setup: host1 + joiner1 with a desk and a kart.
+            let host1 = makeHost()
+            let code1 = try await host1.start()
+            print("chaos: host1 up with code \(code1)")
+            let host1Consumer = Task {
+                for await event in host1.events {
+                    switch event {
+                    case .rosterChanged(let roster):
+                        chaos.setRoster(roster.filter(\.isOnline).count)
+                    case .raceStateChanged(let race):
+                        chaos.setKartFree(race.karts.allSatisfy { $0.ownerWireID == 0 })
+                    default:
+                        break
+                    }
+                }
+            }
+
+            let joiner1 = makeJoiner()
+            await joiner1.start(code: code1)
+            let joiner1Consumer = Task { for await _ in joiner1.events {} }
+            guard await waitUntil({ chaos.host1Roster == 2 }) else {
+                print("chaos: joiner1 never arrived")
+                return false
+            }
+            await joiner1.sendDeskCommand(.claim(zone: "desk-01"))
+            await joiner1.sendDeskCommand(
+                .place(zone: "desk-01", catalogID: 15, x: 5.4, y: 4.6, rotation: 0))
+            // Walk within mounting reach of kart-01 at (8.5, 4.5) — the host
+            // enforces proximity, chaos or not.
+            var walkSeq: UInt32 = 0
+            var walkPosition = Vec2(x: 3, y: 3)
+            for _ in 0..<22 {
+                walkSeq += 1
+                walkPosition = Vec2(
+                    x: min(walkPosition.x + 0.3, 8.4),
+                    y: min(walkPosition.y + 0.1, 4.4))
+                await joiner1.sendInput(
+                    InputFrame(
+                        seq: walkSeq, input: MoveInput(dirX: 1, dirY: 1),
+                        x: Float(walkPosition.x), y: Float(walkPosition.y)))
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            await joiner1.sendRaceCommand(.mount(kartID: "kart-01"))
+            guard await waitUntil({ !chaos.kartFree }) else {
+                print("chaos: kart never mounted")
+                return false
+            }
+
+            // ---- Drill 1: wifi drop mid-drive.
+            await joiner1.dropConnection()
+            let dropOK = await waitUntil(timeout: 10) {
+                chaos.host1Roster == 1 && chaos.kartFree
+            }
+            print("chaos: drill 1 (wifi drop) — roster shrank + kart parked: \(dropOK)")
+
+            // ---- Drill 2: host crash with a joiner attached.
+            let joiner2 = makeJoiner()
+            await joiner2.start(code: code1)
+            let joiner2Consumer = Task {
+                for await event in joiner2.events {
+                    if case .ended = event { chaos.setJoiner2Ended() }
+                    if case .denied = event { chaos.setJoiner2Ended() }
+                }
+            }
+            guard await waitUntil({ chaos.host1Roster == 2 }) else {
+                print("chaos: joiner2 never arrived")
+                return false
+            }
+            await host1.dropAllConnections()
+            let crashOK = await waitUntil(timeout: 10) { chaos.joiner2Ended }
+            print("chaos: drill 2 (host crash) — joiner ended cleanly: \(crashOK)")
+            host1Consumer.cancel()
+            joiner1Consumer.cancel()
+            joiner2Consumer.cancel()
+
+            // ---- Drill 3: rehost with the same stores; desks must survive.
+            let host2 = makeHost()
+            let code2 = try await host2.start()
+            print("chaos: host2 up with code \(code2)")
+            let host2Consumer = Task {
+                for await event in host2.events {
+                    if case .rosterChanged(let roster) = event {
+                        chaos.setRoster(roster.filter(\.isOnline).count)
+                    }
+                }
+            }
+            let joiner3 = makeJoiner()
+            await joiner3.start(code: code2)
+            let joiner3Consumer = Task {
+                for await event in joiner3.events {
+                    switch event {
+                    case .welcomed:
+                        chaos.setJoiner3Welcomed()
+                    case .deskState(let state):
+                        if state.owner(of: "desk-01") == joinerIdentity.playerID,
+                            !state.items(in: "desk-01").isEmpty
+                        {
+                            chaos.setJoiner3DeskIntact()
+                        }
+                    case .denied(let reason) where reason == "Removed by the host.":
+                        chaos.setJoiner3Kicked()
+                    default:
+                        break
+                    }
+                }
+            }
+            let rehostOK = await waitUntil(timeout: 10) {
+                chaos.joiner3Welcomed && chaos.joiner3DeskIntact
+            }
+            print("chaos: drill 3 (rehost) — desk survived the restart: \(rehostOK)")
+
+            // ---- Drill 4: kick, with the reason delivered.
+            await host2.kick(playerID: joinerIdentity.playerID, block: false)
+            let kickOK = await waitUntil(timeout: 10) { chaos.joiner3Kicked }
+            print("chaos: drill 4 (kick) — kicked with reason: \(kickOK)")
+
+            host2Consumer.cancel()
+            joiner3Consumer.cancel()
+            await host2.stop()
+            return dropOK && crashOK && rehostOK && kickOK
+        } catch {
+            print("chaos: error \(error)")
             return false
         }
     }

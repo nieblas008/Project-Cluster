@@ -152,6 +152,16 @@ public final class WorldDatabase: Sendable {
         }
     }
 
+    public func setBlocked(publicKey: String, blocked: Bool) throws {
+        try dbQueue.write { db in
+            if var player = try PlayerRecord.fetchOne(db, key: publicKey) {
+                player.isBlocked = blocked
+                player.isApproved = player.isApproved && !blocked
+                try player.update(db)
+            }
+        }
+    }
+
     public func setStatus(publicKey: String, statusPreference: String) throws {
         try dbQueue.write { db in
             if var player = try PlayerRecord.fetchOne(db, key: publicKey) {

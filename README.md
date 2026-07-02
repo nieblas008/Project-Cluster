@@ -37,6 +37,12 @@ scripts/dev-relay.sh
 # Full end-to-end check (relay + host + joiner + walking, both transports):
 scripts/itest-phase1.sh
 
+# Chaos drills (wifi drop, host crash, rehost, kick):
+scripts/itest-chaos.sh
+
+# Timed world backup/restore drill:
+scripts/drill-restore.sh
+
 # Regenerate art / the mansion map (outputs land in "Project Cluster/Resources"):
 swift scripts/generate-assets.swift
 swift scripts/generate-mansion.swift

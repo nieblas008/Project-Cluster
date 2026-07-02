@@ -87,6 +87,15 @@ public actor JoinSession {
         }
     }
 
+    /// Chaos-drill hook: vanish without a goodbye — simulates a wifi drop.
+    /// The host must notice via the transport, not a leave message.
+    public func dropConnection() async {
+        task?.cancel()
+        datagramTask?.cancel()
+        await datagram?.cancel()
+        await connection?.cancel()
+    }
+
     public func leave() async {
         await sendSealed(.leave)
         task?.cancel()

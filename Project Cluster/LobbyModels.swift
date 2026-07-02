@@ -35,6 +35,9 @@ final class HostLobbyModel {
     }
     private var session: HostSession?
     private var eventsTask: Task<Void, Never>?
+    /// Keeps the Mac awake while the world is up (Phase 7). Display may sleep;
+    /// the system may not — the room's uptime is this process's uptime.
+    private var sleepActivity: NSObjectProtocol?
 
     func startVoice(localWireID: UInt64, pushToTalk: Bool, status: PlayerStatus) {
         let session = session
@@ -88,6 +91,9 @@ final class HostLobbyModel {
                 self.consumeEvents(of: session)
                 let code = try await session.start()
                 self.state = .hosting(code: code)
+                self.sleepActivity = ProcessInfo.processInfo.beginActivity(
+                    options: [.idleSystemSleepDisabled, .automaticTerminationDisabled],
+                    reason: "Hosting a Project Cluster session")
             } catch {
                 self.errorMessage = "Could not start hosting: \(error.localizedDescription)"
                 self.state = .idle
@@ -140,6 +146,11 @@ final class HostLobbyModel {
         Task { await session?.resolveKnock(playerID: knock.id, approve: approve) }
     }
 
+    func kick(playerID: String, block: Bool) {
+        let session = session
+        Task { await session?.kick(playerID: playerID, block: block) }
+    }
+
     func stop() {
         let session = session
         self.session = nil
@@ -159,6 +170,10 @@ final class HostLobbyModel {
         bestLapMs = nil
         inWorld = false
         voice.stop()
+        if let activity = sleepActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            sleepActivity = nil
+        }
     }
 }
 
