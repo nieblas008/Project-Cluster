@@ -77,6 +77,16 @@ public final class WorldDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v3-kart-laps") { db in
+            try db.create(table: "kartLapTimes") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("playerID", .text).notNull().indexed()
+                t.column("displayName", .text).notNull()
+                t.column("timeMs", .integer).notNull()
+                t.column("recordedAt", .datetime).notNull()
+            }
+        }
+
         return migrator
     }
 
@@ -208,6 +218,44 @@ public final class WorldDatabase: Sendable {
                 item.rotation = rotation
                 try item.update(db)
             }
+        }
+    }
+}
+
+// MARK: - Kart laps (ADR 0006)
+
+extension WorldDatabase {
+    /// Records a host-validated lap.
+    public func insertLapTime(playerID: String, displayName: String, timeMs: Int) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO kartLapTimes (playerID, displayName, timeMs, recordedAt)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                arguments: [playerID, displayName, timeMs, Date()])
+        }
+    }
+
+    /// Leaderboard rows: each player's personal best, fastest first.
+    public func bestLapTimes(limit: Int) throws -> [(playerID: String, displayName: String, timeMs: Int)] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT playerID, displayName, MIN(timeMs) AS best
+                    FROM kartLapTimes GROUP BY playerID ORDER BY best ASC LIMIT ?
+                    """,
+                arguments: [limit])
+            return rows.map { ($0["playerID"], $0["displayName"], $0["best"]) }
+        }
+    }
+
+    public func bestLap(playerID: String) throws -> Int? {
+        try dbQueue.read { db in
+            try Int.fetchOne(
+                db, sql: "SELECT MIN(timeMs) FROM kartLapTimes WHERE playerID = ?",
+                arguments: [playerID])
         }
     }
 }

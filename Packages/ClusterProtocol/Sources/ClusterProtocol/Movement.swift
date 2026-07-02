@@ -116,16 +116,25 @@ public enum MovementSim {
     public static func validate(
         previous: Vec2, proposed: Vec2, dt: Double, collision: CollisionMap
     ) -> Vec2 {
-        let maxDistance = MovementRules.walkSpeed * max(dt, 0.001) * MovementRules.validationSpeedSlack
+        validate(
+            previous: previous, proposed: proposed, dt: dt, collision: collision,
+            maxSpeed: MovementRules.walkSpeed, halfExtent: MovementRules.playerHalfExtent)
+    }
+
+    /// Parametrized variant — karts validate against their own speed/extent
+    /// (ADR 0006); walking delegates here with the walking constants.
+    public static func validate(
+        previous: Vec2, proposed: Vec2, dt: Double, collision: CollisionMap,
+        maxSpeed: Double, halfExtent: Double
+    ) -> Vec2 {
+        let maxDistance = maxSpeed * max(dt, 0.001) * MovementRules.validationSpeedSlack
         var accepted = proposed
         let travel = previous.distance(to: proposed)
         if travel > maxDistance {
             let t = maxDistance / travel
             accepted = lerp(previous, proposed, t: t)
         }
-        if boxCollides(
-            center: accepted, halfExtent: MovementRules.playerHalfExtent, collision: collision)
-        {
+        if boxCollides(center: accepted, halfExtent: halfExtent, collision: collision) {
             return previous
         }
         return accepted

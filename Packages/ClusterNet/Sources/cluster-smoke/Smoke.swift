@@ -36,7 +36,7 @@ struct Smoke {
 
         if outcome {
             print(
-                "SMOKE OK — roster, walk, voice, status, and desks all good, "
+                "SMOKE OK — roster, walk, voice, status, desks, and karts all good, "
                     + "transport=\(forceTCP ? "tcp" : "udp")")
             exit(0)
         } else {
@@ -54,6 +54,9 @@ struct Smoke {
         private var _joinerStatusOnHost: PlayerStatus?
         private var _deskOnHost = false
         private var _deskOnJoiner = false
+        private var _kartMounted = false
+        private var _kartMoved = false
+        private var _kartFreed = false
         private var _failure: String?
 
         var walked: Bool { lock.withLock { _walked } }
@@ -63,6 +66,9 @@ struct Smoke {
         var joinerStatusOnHost: PlayerStatus? { lock.withLock { _joinerStatusOnHost } }
         var deskOnHost: Bool { lock.withLock { _deskOnHost } }
         var deskOnJoiner: Bool { lock.withLock { _deskOnJoiner } }
+        var kartMounted: Bool { lock.withLock { _kartMounted } }
+        var kartMoved: Bool { lock.withLock { _kartMoved } }
+        var kartFreed: Bool { lock.withLock { _kartFreed } }
         var failure: String? { lock.withLock { _failure } }
 
         func markWalked() { lock.withLock { _walked = true } }
@@ -72,6 +78,9 @@ struct Smoke {
         func setJoinerStatusOnHost(_ s: PlayerStatus) { lock.withLock { _joinerStatusOnHost = s } }
         func markDeskOnHost() { lock.withLock { _deskOnHost = true } }
         func markDeskOnJoiner() { lock.withLock { _deskOnJoiner = true } }
+        func markKartMounted() { lock.withLock { _kartMounted = true } }
+        func markKartMoved() { lock.withLock { _kartMoved = true } }
+        func markKartFreed() { lock.withLock { _kartFreed = true } }
         func markFailure(_ reason: String) { lock.withLock { _failure = _failure ?? reason } }
     }
 
@@ -93,7 +102,8 @@ struct Smoke {
                {"name":"walls","type":"tilelayer","data":\(data)},
                {"name":"objects","type":"objectgroup","objects":[
                  {"name":"spawn","type":"spawn","x":96.0,"y":96.0},
-                 {"name":"desk-01","type":"desk","x":160.0,"y":128.0,"width":32.0,"height":32.0}]}],
+                 {"name":"desk-01","type":"desk","x":160.0,"y":128.0,"width":32.0,"height":32.0},
+                 {"name":"kart-01","type":"kart","x":256.0,"y":128.0,"width":32.0,"height":32.0}]}],
              "tilesets":[{"firstgid":1,"tiles":[
                {"id":1,"properties":[{"name":"collides","type":"bool","value":true}]}]}]}
             """
@@ -162,6 +172,18 @@ struct Smoke {
                             !state.items(in: "desk-01").isEmpty
                         {
                             results.markDeskOnHost()
+                        }
+                    case .raceStateChanged(let race):
+                        if race.kart(ownedBy: joinerWireID) != nil {
+                            results.markKartMounted()
+                        } else if results.kartMounted {
+                            results.markKartFreed()
+                        }
+                    case .worldSnapshot(let snapshot):
+                        if let joiner = snapshot.players.first(where: { $0.id == joinerWireID }),
+                            joiner.isKarted, joiner.position.x > 10.2
+                        {
+                            results.markKartMoved()
                         }
                     case .ended(let reason):
                         results.markFailure("host ended: \(reason)")
@@ -260,6 +282,32 @@ struct Smoke {
                 "smoke: desk claimed+decorated — host sees it: \(results.deskOnHost), "
                     + "joiner sees it: \(results.deskOnJoiner)")
 
+            // Phase: karts — mount, drive east at kart speed, dismount.
+            await joiner.sendRaceCommand(.mount(kartID: "kart-01"))
+            let mountOK = await waitUntil { results.kartMounted }
+            var kart = KartState(position: Vec2(x: 8.5, y: 4.5), heading: 0, speed: 0)
+            var kartSeq: UInt32 = 1000
+            for _ in 0..<30 {
+                kart =
+                    KartSim.step(
+                        state: kart, input: KartInput(throttle: 1, steer: 0, drift: false),
+                        dt: 1.0 / 30, collision: map.collision
+                    ).state
+                kartSeq += 1
+                await joiner.sendInput(
+                    InputFrame(
+                        seq: kartSeq, input: MoveInput(dirX: 1, dirY: 0),
+                        x: Float(kart.position.x), y: Float(kart.position.y),
+                        flags: 0, heading: Float(kart.heading)))
+                try? await Task.sleep(for: .milliseconds(33))
+            }
+            let kartMoveOK = await waitUntil { results.kartMoved }
+            await joiner.sendRaceCommand(.dismount)
+            let kartFreeOK = await waitUntil { results.kartFreed }
+            print(
+                "smoke: kart mounted: \(results.kartMounted), drove at kart speed: "
+                    + "\(results.kartMoved), freed: \(results.kartFreed)")
+
             hostConsumer.cancel()
             joinerConsumer.cancel()
             await joiner.leave()
@@ -273,7 +321,8 @@ struct Smoke {
                 print("smoke: transport mismatch (forceTCP=\(forceTCP))")
                 return false
             }
-            return voiceOK && results.walked && statusOK && deskOK
+            return voiceOK && results.walked && statusOK && deskOK && mountOK && kartMoveOK
+                && kartFreeOK
         } catch {
             print("smoke: error \(error)")
             return false

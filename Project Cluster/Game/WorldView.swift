@@ -20,6 +20,7 @@ struct WorldView: View {
     @State private var deskEdit = DeskEditModel()
 
     @State private var showRoster = true
+    @State private var showLeaderboard = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -36,6 +37,12 @@ struct WorldView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .padding(.top, 56)
                     .padding(.trailing, 12)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+            if showLeaderboard {
+                LeaderboardPanel(leaderboard: raceStateForMode.leaderboard)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .padding(12)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
             deskPanel
@@ -89,6 +96,10 @@ struct WorldView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
+                if scene?.isLocalKarted != true, scene?.mountableKartID() != nil {
+                    Label("Press E to drive", systemImage: "car.fill")
+                        .hudChip()
+                }
                 if let editing = deskEdit.editingZone {
                     editingPalette(zone: editing)
                 } else if let zone = standingZone {
@@ -303,11 +314,78 @@ struct WorldView: View {
         .help("Toggle the roster")
     }
 
+    private var raceStateForMode: RaceState {
+        switch mode {
+        case .host: model.hostLobby.raceState
+        case .join: model.joinLobby.raceState
+        }
+    }
+
+    private var lapTimes: (last: UInt32?, best: UInt32?) {
+        switch mode {
+        case .host: (model.hostLobby.lastLapMs, model.hostLobby.bestLapMs)
+        case .join: (model.joinLobby.lastLapMs, model.joinLobby.bestLapMs)
+        }
+    }
+
+    static func formatMs(_ ms: UInt32) -> String {
+        let totalSeconds = Double(ms) / 1000
+        let minutes = Int(totalSeconds) / 60
+        let seconds = totalSeconds - Double(minutes * 60)
+        return String(format: "%d:%05.2f", minutes, seconds)
+    }
+
+    /// Live lap stopwatch + last/best — visible while karted.
+    @ViewBuilder
+    private var kartChip: some View {
+        if scene?.isLocalKarted == true {
+            TimelineView(.periodic(from: .now, by: 0.1)) { _ in
+                HStack(spacing: 8) {
+                    Image(systemName: "timer")
+                    if let start = scene?.lapClockStart {
+                        Text(Self.formatMs(UInt32(Date().timeIntervalSince(start) * 1000)))
+                            .font(.callout.monospacedDigit())
+                    } else {
+                        Text("cross the line to start")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let last = lapTimes.last {
+                        Text("last \(Self.formatMs(last))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    if let best = lapTimes.best {
+                        Text("best \(Self.formatMs(best))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.yellow)
+                    }
+                }
+            }
+            .hudChip()
+            .help("E hop out · Space drift · H horn")
+        }
+    }
+
+    private var leaderboardToggle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { showLeaderboard.toggle() }
+        } label: {
+            Image(systemName: "trophy.fill")
+                .foregroundStyle(showLeaderboard ? .yellow : .white)
+        }
+        .buttonStyle(.borderless)
+        .hudChip()
+        .help("Lap leaderboard")
+    }
+
     @ViewBuilder
     private var hud: some View {
         HStack(spacing: 12) {
             micControls
             statusControl
+            kartChip
+            leaderboardToggle
             switch mode {
             case .host:
                 if case .hosting(let code) = model.hostLobby.state {
@@ -408,7 +486,29 @@ struct WorldView: View {
         }
         keys.install(
             onChange: { [weak newScene] input in newScene?.setInput(input) },
-            onPushToTalk: { held in voice.pttHeld = held }
+            onPushToTalk: { held in voice.pttHeld = held },
+            onDrift: { [weak newScene] held in newScene?.setDrift(held) },
+            onAction: { [weak newScene, weak model] in
+                guard let scene = newScene, let model else { return }
+                let lobbyRace: (RaceCommand) -> Void = { command in
+                    switch mode {
+                    case .host: model.hostLobby.performRace(command)
+                    case .join: model.joinLobby.performRace(command)
+                    }
+                }
+                if scene.isLocalKarted {
+                    lobbyRace(.dismount)
+                } else if let kartID = scene.mountableKartID() {
+                    lobbyRace(.mount(kartID: kartID))
+                }
+            },
+            onHorn: { [weak newScene, weak model] in
+                guard let scene = newScene, let model, scene.isLocalKarted else { return }
+                switch mode {
+                case .host: model.hostLobby.performRace(.horn)
+                case .join: model.joinLobby.performRace(.horn)
+                }
+            }
         )
     }
 
@@ -547,13 +647,35 @@ final class KeyState {
         125: MoveInput(dirX: 0, dirY: 1),  // ↓
     ]
 
+    // Space = handbrake/drift (hold) · E = mount/dismount · H = horn (ADR 0006).
+    private static let driftKey: UInt16 = 49
+    private static let actionKey: UInt16 = 14
+    private static let hornKey: UInt16 = 4
+
     func install(
         onChange: @escaping (MoveInput) -> Void,
-        onPushToTalk: @escaping (Bool) -> Void
+        onPushToTalk: @escaping (Bool) -> Void,
+        onDrift: @escaping (Bool) -> Void = { _ in },
+        onAction: @escaping () -> Void = {},
+        onHorn: @escaping () -> Void = {}
     ) {
         remove()
         let down = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, Self.keyMap[event.keyCode] != nil, !event.isARepeat else {
+            guard let self else { return event }
+            switch event.keyCode {
+            case Self.driftKey:
+                if !event.isARepeat { onDrift(true) }
+                return nil
+            case Self.actionKey:
+                if !event.isARepeat { onAction() }
+                return nil
+            case Self.hornKey:
+                if !event.isARepeat { onHorn() }
+                return nil
+            default:
+                break
+            }
+            guard Self.keyMap[event.keyCode] != nil, !event.isARepeat else {
                 return event
             }
             self.pressed.insert(event.keyCode)
@@ -561,7 +683,15 @@ final class KeyState {
             return nil
         }
         let up = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
-            guard let self, Self.keyMap[event.keyCode] != nil else { return event }
+            guard let self else { return event }
+            if event.keyCode == Self.driftKey {
+                onDrift(false)
+                return nil
+            }
+            if event.keyCode == Self.actionKey || event.keyCode == Self.hornKey {
+                return nil
+            }
+            guard Self.keyMap[event.keyCode] != nil else { return event }
             self.pressed.remove(event.keyCode)
             onChange(self.combinedInput())
             return nil
@@ -601,4 +731,43 @@ final class KeyState {
 final class DeskEditModel {
     var editingZone: String?
     var selectedCatalogID: UInt16 = 1
+}
+
+/// Best lap per player, fastest first (ADR 0006).
+struct LeaderboardPanel: View {
+    let leaderboard: [LapRecord]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Label("Lap Records", systemImage: "trophy.fill")
+                .font(.headline)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            Divider().background(.white.opacity(0.15))
+            if leaderboard.isEmpty {
+                Text("No laps yet — cross the start line on the gravel loop.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(12)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(leaderboard.enumerated()), id: \.element.playerID) { rank, record in
+                        HStack(spacing: 8) {
+                            Text(rank == 0 ? "🏆" : "\(rank + 1).")
+                                .frame(width: 26, alignment: .trailing)
+                            Text(record.displayName)
+                            Spacer()
+                            Text(WorldView.formatMs(record.timeMs))
+                                .font(.callout.monospacedDigit())
+                                .foregroundStyle(rank == 0 ? .yellow : .white)
+                        }
+                    }
+                }
+                .padding(10)
+            }
+        }
+        .foregroundStyle(.white)
+        .frame(width: 250)
+        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
+    }
 }

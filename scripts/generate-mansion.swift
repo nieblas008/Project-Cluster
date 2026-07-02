@@ -126,6 +126,17 @@ struct Obj {
 var objects: [Obj] = [
     Obj(name: "spawn", type: "spawn", x: 22, y: 18, w: 0, h: 0),
     Obj(name: "kart-track", type: "kart-track", x: 2, y: 2, w: W - 4, h: H - 4),
+    // Kart pads, lined up on the south straight of the gravel loop (ADR 0006).
+    Obj(name: "kart-01", type: "kart", x: 17, y: 26, w: 1, h: 1),
+    Obj(name: "kart-02", type: "kart", x: 19, y: 26, w: 1, h: 1),
+    Obj(name: "kart-03", type: "kart", x: 24, y: 26, w: 1, h: 1),
+    Obj(name: "kart-04", type: "kart", x: 26, y: 26, w: 1, h: 1),
+    // Checkpoints, in lap order: cp-0 is start/finish on the south straight,
+    // then east, north, west — each spans the full loop width.
+    Obj(name: "cp-0", type: "checkpoint", x: 21, y: 25, w: 2, h: 4),
+    Obj(name: "cp-1", type: "checkpoint", x: 39, y: 13, w: 4, h: 2),
+    Obj(name: "cp-2", type: "checkpoint", x: 21, y: 1, w: 2, h: 4),
+    Obj(name: "cp-3", type: "checkpoint", x: 1, y: 13, w: 4, h: 2),
 ]
 // 16 desks: 4 per office (offices: x 9–14, 16–20, 22–27, 29–34 / y 10–13).
 let officeRanges = [(9, 14), (16, 20), (22, 27), (29, 34)]

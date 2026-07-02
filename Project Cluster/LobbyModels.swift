@@ -24,6 +24,9 @@ final class HostLobbyModel {
     private(set) var knocks: [Knock] = []
     private(set) var errorMessage: String?
     private(set) var deskState = DeskState()
+    private(set) var raceState = RaceState()
+    private(set) var lastLapMs: UInt32?
+    private(set) var bestLapMs: UInt32?
     var inWorld = false
 
     let voice = VoiceController()
@@ -52,6 +55,11 @@ final class HostLobbyModel {
         Task { await session?.performDeskCommand(command) }
     }
 
+    func performRace(_ command: RaceCommand) {
+        let session = session
+        Task { await session?.performRaceCommand(command) }
+    }
+
     func start(
         endpoint: RelayEndpoint, identity: PlayerIdentity, displayName: String,
         avatarPreset: String, map: WorldMap, allowUDP: Bool, status: PlayerStatus
@@ -73,7 +81,8 @@ final class HostLobbyModel {
                     map: map,
                     allowUDP: allowUDP,
                     initialStatus: status,
-                    deskStore: WorldDeskStoreAdapter(database: database)
+                    deskStore: WorldDeskStoreAdapter(database: database),
+                    lapStore: WorldLapStoreAdapter(database: database)
                 )
                 self.session = session
                 self.consumeEvents(of: session)
@@ -105,6 +114,16 @@ final class HostLobbyModel {
                 case .deskStateChanged(let deskState):
                     self.deskState = deskState
                     self.scene?.applyDeskState(deskState)
+                case .raceStateChanged(let raceState):
+                    self.raceState = raceState
+                    self.scene?.applyRaceState(raceState)
+                case .lapCompleted(let timeMs, let isBest):
+                    self.lastLapMs = timeMs
+                    if isBest || self.bestLapMs.map({ timeMs < $0 }) ?? true {
+                        self.bestLapMs = timeMs
+                    }
+                case .horn(let from):
+                    self.scene?.playHorn(from: from)
                 case .ended(let reason):
                     if self.state != .idle {
                         self.errorMessage = reason
@@ -135,6 +154,9 @@ final class HostLobbyModel {
         roster = []
         knocks = []
         deskState = DeskState()
+        raceState = RaceState()
+        lastLapMs = nil
+        bestLapMs = nil
         inWorld = false
         voice.stop()
     }
@@ -144,11 +166,13 @@ extension HostLobbyModel: WorldSceneDelegate {
     /// Host's own avatar: published straight into the authoritative world.
     func worldScene(
         _ scene: WorldScene, didUpdateLocal position: Vec2, facing: Facing,
-        isMoving: Bool, input: MoveInput
+        isMoving: Bool, input: MoveInput, heading: Double, isKarted: Bool, drifting: Bool
     ) {
         let session = session
         Task {
-            await session?.updateLocalPlayer(position: position, facing: facing, isMoving: isMoving)
+            await session?.updateLocalPlayer(
+                position: position, facing: facing, isMoving: isMoving,
+                heading: heading, drifting: drifting)
         }
     }
 }
@@ -169,6 +193,9 @@ final class JoinLobbyModel {
     private(set) var roster: [RosterEntry] = []
     private(set) var usingUDP: Bool?
     private(set) var deskState = DeskState()
+    private(set) var raceState = RaceState()
+    private(set) var lastLapMs: UInt32?
+    private(set) var bestLapMs: UInt32?
 
     let voice = VoiceController()
     weak var scene: WorldScene? {
@@ -195,6 +222,11 @@ final class JoinLobbyModel {
     func performDesk(_ command: DeskCommand) {
         let session = session
         Task { await session?.sendDeskCommand(command) }
+    }
+
+    func performRace(_ command: RaceCommand) {
+        let session = session
+        Task { await session?.sendRaceCommand(command) }
     }
 
     func join(
@@ -234,6 +266,16 @@ final class JoinLobbyModel {
                 case .deskState(let deskState):
                     self.deskState = deskState
                     self.scene?.applyDeskState(deskState)
+                case .raceState(let raceState):
+                    self.raceState = raceState
+                    self.scene?.applyRaceState(raceState)
+                case .lapCompleted(let timeMs, let isBest):
+                    self.lastLapMs = timeMs
+                    if isBest || self.bestLapMs.map({ timeMs < $0 }) ?? true {
+                        self.bestLapMs = timeMs
+                    }
+                case .horn(let from):
+                    self.scene?.playHorn(from: from)
                 case .denied(let reason):
                     self.state = .denied(reason: reason)
                     self.roster = []
@@ -260,6 +302,9 @@ final class JoinLobbyModel {
         roster = []
         usingUDP = nil
         deskState = DeskState()
+        raceState = RaceState()
+        lastLapMs = nil
+        bestLapMs = nil
         voice.stop()
         Task { await session?.leave() }
     }
@@ -273,11 +318,12 @@ extension JoinLobbyModel: WorldSceneDelegate {
     /// Joiner's avatar: predicted locally, sent as input for host validation.
     func worldScene(
         _ scene: WorldScene, didUpdateLocal position: Vec2, facing: Facing,
-        isMoving: Bool, input: MoveInput
+        isMoving: Bool, input: MoveInput, heading: Double, isKarted: Bool, drifting: Bool
     ) {
         inputSeq &+= 1
         let frame = InputFrame(
-            seq: inputSeq, input: input, x: Float(position.x), y: Float(position.y))
+            seq: inputSeq, input: input, x: Float(position.x), y: Float(position.y),
+            flags: drifting ? InputFlags.drift : 0, heading: Float(heading))
         let session = session
         Task { await session?.sendInput(frame) }
     }

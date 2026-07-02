@@ -15,6 +15,12 @@ public enum JoinSessionEvent: Sendable {
     case voiceReceived(speakerID: UInt64, seq: UInt32, opus: Data)
     /// The full desk world, after welcome and on every change (ADR 0005).
     case deskState(DeskState)
+    /// Kart assignments / parked poses / leaderboard (ADR 0006).
+    case raceState(RaceState)
+    /// Your own host-validated lap time.
+    case lapCompleted(timeMs: UInt32, isBest: Bool)
+    /// Someone honked; attenuate by distance client-side.
+    case horn(from: UInt64)
     case denied(reason: String)
     case ended(reason: String)
 }
@@ -67,6 +73,11 @@ public actor JoinSession {
     /// A desk edit — the host validates and answers with a deskState broadcast.
     public func sendDeskCommand(_ command: DeskCommand) async {
         await sendSealed(.deskCommand(command))
+    }
+
+    /// Mount/dismount/horn — the host validates (ADR 0006).
+    public func sendRaceCommand(_ command: RaceCommand) async {
+        await sendSealed(.raceCommand(command))
     }
 
     public func start(code rawCode: String) async {
@@ -202,7 +213,13 @@ public actor JoinSession {
                     return
                 case .deskState(let state):
                     eventsContinuation.yield(.deskState(state))
-                case .joinHello, .transportSelected, .setStatus, .deskCommand:
+                case .raceState(let state):
+                    eventsContinuation.yield(.raceState(state))
+                case .lapCompleted(let timeMs, let isBest):
+                    eventsContinuation.yield(.lapCompleted(timeMs: timeMs, isBest: isBest))
+                case .raceEvent(let hornFrom):
+                    eventsContinuation.yield(.horn(from: hornFrom))
+                case .joinHello, .transportSelected, .setStatus, .deskCommand, .raceCommand:
                     throw ConnectionError.protocolViolation
                 }
             }

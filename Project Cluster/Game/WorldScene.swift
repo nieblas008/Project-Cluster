@@ -4,10 +4,11 @@ import SpriteKit
 @MainActor
 protocol WorldSceneDelegate: AnyObject {
     /// ~20 Hz while in the world: the local avatar's predicted state, for the
-    /// session to publish (host) or send as input (joiner).
+    /// session to publish (host) or send as input (joiner). Kart fields ride
+    /// along when driving (ADR 0006).
     func worldScene(
         _ scene: WorldScene, didUpdateLocal position: Vec2, facing: Facing,
-        isMoving: Bool, input: MoveInput)
+        isMoving: Bool, input: MoveInput, heading: Double, isKarted: Bool, drifting: Bool)
 }
 
 /// The mansion, rendered: tiles from the shared map, the local avatar driven
@@ -26,6 +27,20 @@ final class WorldScene: SKScene {
     private var tilesTexture: SKTexture?
     private var avatarsTexture: SKTexture?
     private var itemsTexture: SKTexture?
+    private var kartsTexture: SKTexture?
+
+    // Race (ADR 0006)
+    private var raceState = RaceState()
+    private var parkedKartNodes: [String: SKSpriteNode] = [:]
+    private var localKart: KartState?
+    private var driftHeld = false
+    private var checkpointZones: [WorldMap.Zone] = []
+    private var displayLapTracker = LapTracker()
+    /// Live lap stopwatch for the HUD; nil until the start line arms it.
+    private(set) var lapClockStart: Date?
+    private var engineAudio: SKAudioNode?
+    private var skidAccumulator: TimeInterval = 0
+    var isLocalKarted: Bool { localKart != nil }
 
     private var localNode: AvatarNode?
     private var localPosition: Vec2?
@@ -72,6 +87,7 @@ final class WorldScene: SKScene {
         backgroundColor = NSColor(srgbRed: 0.10, green: 0.12, blue: 0.10, alpha: 1)
         loadTextures()
         buildTileNodes()
+        checkpointZones = RaceRules.checkpoints(in: map)
         camera = cameraNode
         addChild(cameraNode)
         cameraNode.setScale(0.8)
@@ -158,6 +174,120 @@ final class WorldScene: SKScene {
         return SKTexture(rect: rect, in: itemsTexture)
     }
 
+    func setDrift(_ held: Bool) {
+        if held, !driftHeld, let kart = localKart, abs(kart.speed) > 5 {
+            playSound("skid.wav")
+        }
+        driftHeld = held
+    }
+
+    func applyRaceState(_ state: RaceState) {
+        raceState = state
+
+        var seen = Set<String>()
+        for kart in state.karts where kart.ownerWireID == 0 {
+            seen.insert(kart.id)
+            let node =
+                parkedKartNodes[kart.id]
+                ?? {
+                    let created = SKSpriteNode(texture: kartTexture(column: 5))
+                    created.size = CGSize(width: 30, height: 30)
+                    created.zPosition = 4
+                    addChild(created)
+                    parkedKartNodes[kart.id] = created
+                    return created
+                }()
+            node.position = Self.point(forTile: kart.position)
+            node.zRotation = -CGFloat(kart.heading) - .pi / 2
+        }
+        for (id, node) in parkedKartNodes where !seen.contains(id) {
+            node.removeFromParent()
+            parkedKartNodes.removeValue(forKey: id)
+        }
+
+        // My own mount/dismount transitions.
+        let mine = state.kart(ownedBy: localWireID)
+        if let mine, localKart == nil {
+            localKart = KartState(
+                position: mine.position, heading: Double(mine.heading), speed: 0)
+            localPosition = mine.position
+            displayLapTracker.reset()
+            lapClockStart = nil
+            startEngine()
+        } else if mine == nil, localKart != nil {
+            localKart = nil
+            displayLapTracker.reset()
+            lapClockStart = nil
+            stopEngine()
+            localNode?.clearKart()
+        }
+    }
+
+    /// Nearest free kart within mounting reach of the local player, if any.
+    func mountableKartID() -> String? {
+        guard localKart == nil, let position = localPositionSnapshot else { return nil }
+        return raceState.karts
+            .filter { $0.ownerWireID == 0 }
+            .filter { $0.position.distance(to: position) <= RaceRules.mountReachTiles }
+            .min { $0.position.distance(to: position) < $1.position.distance(to: position) }?
+            .id
+    }
+
+    func playHorn(from wireID: UInt64) {
+        // Attenuate crudely: only within earshot of me (PLAN §8 radius).
+        let source: Vec2? =
+            wireID == localWireID
+            ? localPosition
+            : interpolators[wireID]?.sample(at: CACurrentMediaTime())?.position
+        if let source, let me = localPosition,
+            me.distance(to: source) > ProximityRules.standard.silenceRadius
+        {
+            return
+        }
+        playSound("horn.wav")
+    }
+
+    private func playSound(_ name: String) {
+        guard Bundle.main.url(forResource: name, withExtension: nil) != nil else { return }
+        run(SKAction.playSoundFileNamed(name, waitForCompletion: false))
+    }
+
+    private func startEngine() {
+        guard engineAudio == nil,
+            Bundle.main.url(forResource: "engine.wav", withExtension: nil) != nil
+        else { return }
+        let audio = SKAudioNode(fileNamed: "engine.wav")
+        audio.autoplayLooped = true
+        audio.run(SKAction.changeVolume(to: 0.25, duration: 0))
+        localNode?.addChild(audio)
+        engineAudio = audio
+    }
+
+    private func stopEngine() {
+        engineAudio?.removeFromParent()
+        engineAudio = nil
+    }
+
+    private func kartTexture(column: Int) -> SKTexture? {
+        guard let kartsTexture else { return nil }
+        let rect = CGRect(x: CGFloat(column) / 6, y: 0, width: 1.0 / 6, height: 1)
+        return SKTexture(rect: rect, in: kartsTexture)
+    }
+
+    private func kartTexture(preset: String) -> SKTexture? {
+        kartTexture(column: Self.presetOrder.firstIndex(of: preset) ?? 0)
+    }
+
+    private func spawnSkid(at position: Vec2) {
+        let dot = SKShapeNode(rectOf: CGSize(width: 5, height: 3), cornerRadius: 1)
+        dot.fillColor = NSColor(srgbRed: 0.15, green: 0.13, blue: 0.1, alpha: 0.5)
+        dot.strokeColor = .clear
+        dot.position = Self.point(forTile: position)
+        dot.zPosition = 1.5
+        addChild(dot)
+        dot.run(.sequence([.fadeOut(withDuration: 1.0), .removeFromParent()]))
+    }
+
     func applyRoster(_ roster: [RosterEntry]) {
         rosterMeta = Dictionary(
             uniqueKeysWithValues: roster.map {
@@ -210,22 +340,64 @@ final class WorldScene: SKScene {
         lastUpdateTime = currentTime
         guard dt > 0 else { return }
 
-        if var position = localPosition {
-            position = MovementSim.step(
-                position: position, input: currentInput, dt: dt, collision: map.collision)
-            localPosition = position
-            localPositionSnapshot = position
-            localFacing = Facing.from(input: currentInput, previous: localFacing)
+        if localPosition != nil {
+            let position: Vec2
+            let moving: Bool
+            let heading: Double
+            let drifting: Bool
 
             let node = localNode ?? makeAvatarNode(name: localDisplayName, preset: localPreset)
             if localNode == nil {
                 localNode = node
                 addChild(node)
             }
-            node.apply(
-                point: Self.point(forTile: position), facing: localFacing,
-                moving: currentInput.isMoving,
-                texture: avatarTexture(preset: localPreset, facing: localFacing))
+
+            if var kart = localKart {
+                // Kart prediction: same sim the host validates against.
+                let input = KartInput(moveInput: currentInput, drift: driftHeld)
+                let result = KartSim.step(
+                    state: kart, input: input, dt: dt, collision: map.collision)
+                kart = result.state
+                localKart = kart
+                position = kart.position
+                moving = abs(kart.speed) > 0.1
+                heading = kart.heading
+                drifting = input.drift && abs(kart.speed) > 3
+
+                node.position = Self.point(forTile: position)
+                node.setKart(texture: kartTexture(preset: localPreset), heading: heading)
+                if drifting {
+                    skidAccumulator += dt
+                    if skidAccumulator >= 0.05 {
+                        skidAccumulator = 0
+                        spawnSkid(at: position)
+                    }
+                }
+                if let event = displayLapTracker.update(
+                    position: position, checkpoints: checkpointZones,
+                    now: CACurrentMediaTime())
+                {
+                    switch event {
+                    case .armed, .lapCompleted:
+                        lapClockStart = Date()
+                    }
+                }
+            } else {
+                var walked = localPosition!
+                walked = MovementSim.step(
+                    position: walked, input: currentInput, dt: dt, collision: map.collision)
+                position = walked
+                moving = currentInput.isMoving
+                heading = 0
+                drifting = false
+                localFacing = Facing.from(input: currentInput, previous: localFacing)
+                node.apply(
+                    point: Self.point(forTile: position), facing: localFacing,
+                    moving: moving,
+                    texture: avatarTexture(preset: localPreset, facing: localFacing))
+            }
+            localPosition = position
+            localPositionSnapshot = position
             if let mine = rosterMeta[localWireID] {
                 node.setStatus(mine.status, away: mine.isAway)
             }
@@ -234,13 +406,17 @@ final class WorldScene: SKScene {
             cameraNode.position = CGPoint(
                 x: cameraNode.position.x + (target.x - cameraNode.position.x) * 0.18,
                 y: cameraNode.position.y + (target.y - cameraNode.position.y) * 0.18)
+            let targetScale: CGFloat = localKart != nil ? 1.1 : 0.8
+            cameraNode.setScale(
+                cameraNode.xScale + (targetScale - cameraNode.xScale) * 0.06)
 
             emitAccumulator += dt
             if emitAccumulator >= 0.05 {
                 emitAccumulator = 0
                 worldDelegate?.worldScene(
                     self, didUpdateLocal: position, facing: localFacing,
-                    isMoving: currentInput.isMoving, input: currentInput)
+                    isMoving: moving, input: currentInput,
+                    heading: heading, isKarted: localKart != nil, drifting: drifting)
             }
         }
 
@@ -257,10 +433,21 @@ final class WorldScene: SKScene {
                     addChild(created)
                     return created
                 }()
-            node.apply(
-                point: Self.point(forTile: sample.position), facing: sample.facing,
-                moving: sample.isMoving,
-                texture: avatarTexture(preset: meta?.preset ?? "default", facing: sample.facing))
+            if sample.isKarted {
+                node.position = Self.point(forTile: sample.position)
+                node.setKart(
+                    texture: kartTexture(preset: meta?.preset ?? "default"),
+                    heading: Double(sample.heading))
+                if sample.isDrifting, Int(currentTime * 20) % 3 == 0 {
+                    spawnSkid(at: sample.position)
+                }
+            } else {
+                node.clearKart()
+                node.apply(
+                    point: Self.point(forTile: sample.position), facing: sample.facing,
+                    moving: sample.isMoving,
+                    texture: avatarTexture(preset: meta?.preset ?? "default", facing: sample.facing))
+            }
             node.setStatus(meta?.status ?? .available, away: meta?.isAway ?? false)
         }
     }
@@ -279,6 +466,7 @@ final class WorldScene: SKScene {
         tilesTexture = texture("tiles")
         avatarsTexture = texture("avatars")
         itemsTexture = texture("items")
+        kartsTexture = texture("karts")
     }
 
     private func buildTileNodes() {
@@ -348,13 +536,20 @@ final class AvatarNode: SKNode {
     private let nameplate: SKLabelNode
     private let speakingRing: SKShapeNode
     private let statusBadge: SKShapeNode
+    private let kartSprite: SKSpriteNode
 
     init(displayName: String) {
         body = SKSpriteNode(color: .systemTeal, size: CGSize(width: 32, height: 32))
         nameplate = SKLabelNode(text: displayName)
         speakingRing = SKShapeNode(circleOfRadius: 19)
         statusBadge = SKShapeNode(circleOfRadius: 4)
+        kartSprite = SKSpriteNode(texture: nil)
         super.init()
+
+        kartSprite.size = CGSize(width: 30, height: 30)
+        kartSprite.zPosition = 5
+        kartSprite.isHidden = true
+        addChild(kartSprite)
 
         statusBadge.position = CGPoint(x: 11, y: 13)
         statusBadge.strokeColor = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.5)
@@ -397,6 +592,22 @@ final class AvatarNode: SKNode {
 
     func setSpeaking(_ speaking: Bool) {
         speakingRing.isHidden = !speaking
+    }
+
+    /// Driving: the kart replaces the body; the nameplate and rings stay.
+    /// Sprite art points up; tile-space heading 0 = east, y down — hence the
+    /// rotation offset.
+    func setKart(texture: SKTexture?, heading: Double) {
+        kartSprite.isHidden = false
+        kartSprite.texture = texture
+        kartSprite.zRotation = -CGFloat(heading) - .pi / 2
+        body.isHidden = true
+    }
+
+    func clearKart() {
+        guard !kartSprite.isHidden else { return }
+        kartSprite.isHidden = true
+        body.isHidden = false
     }
 
     func setStatus(_ status: PlayerStatus, away: Bool) {

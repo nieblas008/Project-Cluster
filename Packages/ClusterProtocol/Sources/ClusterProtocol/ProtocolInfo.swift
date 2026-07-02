@@ -5,5 +5,7 @@ public enum ProtocolInfo {
     /// v2: welcome gained mapVersion + UDP policy; world/datagram space added (ADR 0002).
     /// v3: roster gained status/away/last-seen; setStatus message added (ADR 0004).
     /// v4: deskState/deskCommand messages added (ADR 0005).
-    public static let wireVersion: UInt16 = 4
+    /// v5: snapshots gained mode/heading, inputs gained flags/heading; race
+    ///     messages added (ADR 0006).
+    public static let wireVersion: UInt16 = 5
 }

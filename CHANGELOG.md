@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.8.0 — Phase 6: Go-karts 🏎️ (2026-07-02)
+
+- Four karts wait on the gravel loop's south straight. Walk up, press E, and
+  the avatar becomes a kart: momentum, braking, reverse, speed-scaled steering,
+  and a Space handbrake that trades grip for slide (ADR 0006). Walls scrub
+  speed with a satisfying thunk instead of sticking.
+- Every handling number lives in KartTuning.standard, pinned by tests —
+  "the kart feels wrong" is a constants PR.
+- The track: checkpoints around the loop with a host-clocked lap timer that
+  refuses shortcuts and can't be forged by a fast client. cross the start line
+  to arm, lap in order, and your time lands in the world database.
+- Leaderboard (trophy button): each player's personal best, fastest first,
+  persisted across sessions. lapCompleted tells you your time and whether it's
+  a new PB. The Phase 5 trophies finally mean something.
+- Feel: color-matched kart sprites rotating to live headings (remote karts
+  turn smoothly via angle interpolation), skid marks while drifting, generated
+  engine loop / horn (H) / skid audio, camera zooms out at speed.
+- Claim locks: one driver per kart, mount requires standing next to it,
+  dismount (or disconnect) parks it where you stood; a fresh session lines
+  karts back at their pads.
+- Wire version 5 (snapshot mode/heading, input flags, race messages). The
+  smoke now MOUNTS, drives at kart speed past the host's kart-aware
+  validation, and dismounts — on UDP and forced TCP.
+
 ## 0.7.0 — Phase 5: Desks & personalization (2026-07-02)
 
 - Claim a desk: stand in any of the mansion's 16 desk zones and the desk panel

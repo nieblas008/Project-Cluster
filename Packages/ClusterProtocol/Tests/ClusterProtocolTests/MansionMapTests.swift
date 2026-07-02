@@ -45,5 +45,17 @@ import Testing
                 !map.collision.isSolid(tileX: Int(desk.x), tileY: Int(desk.y)),
                 "desk \(desk.name) is inside a wall")
         }
+
+        // Phase 6: four kart pads on drivable ground, four ordered checkpoints.
+        let pads = RaceRules.kartPads(in: map)
+        #expect(pads.count == 4)
+        for pad in pads {
+            #expect(
+                !MovementSim.boxCollides(
+                    center: Vec2(x: pad.x + pad.width / 2, y: pad.y + pad.height / 2),
+                    halfExtent: KartTuning.standard.halfExtent, collision: map.collision),
+                "kart pad \(pad.name) is stuck in a wall")
+        }
+        #expect(RaceRules.checkpoints(in: map).map(\.name) == ["cp-0", "cp-1", "cp-2", "cp-3"])
     }
 }

@@ -95,3 +95,23 @@ struct WorldDeskStoreAdapter: DeskStore {
             id: Int64(id), x: Double(x), y: Double(y), rotation: Int(rotation))
     }
 }
+
+/// Lap persistence over the world database (ADR 0006).
+struct WorldLapStoreAdapter: LapStore {
+    let database: WorldDatabase
+
+    func insertLap(playerID: String, displayName: String, timeMs: Int) throws {
+        try database.insertLapTime(playerID: playerID, displayName: displayName, timeMs: timeMs)
+    }
+
+    func bestLap(playerID: String) throws -> Int? {
+        try database.bestLap(playerID: playerID)
+    }
+
+    func topLaps(limit: Int) throws -> [LapRecord] {
+        try database.bestLapTimes(limit: limit).map {
+            LapRecord(
+                playerID: $0.playerID, displayName: $0.displayName, timeMs: UInt32($0.timeMs))
+        }
+    }
+}

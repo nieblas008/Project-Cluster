@@ -13,6 +13,12 @@ public enum HostSessionEvent: Sendable {
     case voiceReceived(speakerID: UInt64, seq: UInt32, opus: Data)
     /// Claims or placements changed (ADR 0005) — includes the initial load.
     case deskStateChanged(DeskState)
+    /// Kart assignments / parked poses / leaderboard changed (ADR 0006).
+    case raceStateChanged(RaceState)
+    /// The host's own lap (joiners get a targeted message instead).
+    case lapCompleted(timeMs: UInt32, isBest: Bool)
+    /// Someone honked; attenuate by distance client-side.
+    case horn(from: UInt64)
     case ended(reason: String)
 }
 
@@ -34,8 +40,14 @@ public actor HostSession {
     /// Session-wide policy from Settings → Connection (ADR 0002).
     private let allowUDP: Bool
     private let deskStore: any DeskStore
+    private let lapStore: any LapStore
     private let sessionKey = HostSessionKey()
     private var deskState = DeskState()
+    private var raceState = RaceState()
+    private var kartByPlayer: [String: String] = [:]
+    private var lapTrackers: [String: LapTracker] = [:]
+    private var checkpoints: [WorldMap.Zone] = []
+    private let sessionEpoch = ContinuousClock.now
 
     private var control: FrameConnection?
     private var sessionCode: String?
@@ -54,6 +66,8 @@ public actor HostSession {
         var position: Vec2
         var facing: Facing = .down
         var isMoving = false
+        var heading: Double = 0
+        var drifting = false
         var lastInputAt: ContinuousClock.Instant?
     }
 
@@ -81,7 +95,8 @@ public actor HostSession {
         map: WorldMap,
         allowUDP: Bool,
         initialStatus: PlayerStatus = .available,
-        deskStore: any DeskStore = InMemoryDeskStore()
+        deskStore: any DeskStore = InMemoryDeskStore(),
+        lapStore: any LapStore = InMemoryLapStore()
     ) {
         self.endpoint = endpoint
         self.identity = identity
@@ -93,6 +108,7 @@ public actor HostSession {
         self.allowUDP = allowUDP
         self.initialStatus = initialStatus
         self.deskStore = deskStore
+        self.lapStore = lapStore
         (events, eventsContinuation) = AsyncStream.makeStream()
     }
 
@@ -120,8 +136,18 @@ public actor HostSession {
         statuses[identity.playerID] = initialStatus
         lastActivityAt[identity.playerID] = .now
         deskState = (try? deskStore.loadDeskState()) ?? DeskState()
+        checkpoints = RaceRules.checkpoints(in: map)
+        raceState = RaceState(
+            karts: RaceRules.kartPads(in: map).map { pad in
+                KartInfo(
+                    id: pad.name, ownerWireID: 0,
+                    x: Float(pad.x + pad.width / 2), y: Float(pad.y + pad.height / 2),
+                    heading: -Float.pi / 2)
+            },
+            leaderboard: (try? lapStore.topLaps(limit: 10)) ?? [])
         eventsContinuation.yield(.registered(code: code))
         eventsContinuation.yield(.deskStateChanged(deskState))
+        eventsContinuation.yield(.raceStateChanged(raceState))
         eventsContinuation.yield(.rosterChanged(currentRoster()))
         startPings(on: control)
         startTickLoop()
@@ -147,11 +173,17 @@ public actor HostSession {
     }
 
     /// The host's own avatar, reported by its scene (~30 Hz). The host is the
-    /// authority; its own movement isn't validated, just published.
-    public func updateLocalPlayer(position: Vec2, facing: Facing, isMoving: Bool) {
+    /// authority; its own movement isn't validated, just published — but its
+    /// laps go through the same tracker as everyone else's.
+    public func updateLocalPlayer(
+        position: Vec2, facing: Facing, isMoving: Bool,
+        heading: Double = 0, drifting: Bool = false
+    ) async {
         world[identity.playerID] = WorldPlayer(
-            position: position, facing: facing, isMoving: isMoving, lastInputAt: nil)
+            position: position, facing: facing, isMoving: isMoving,
+            heading: heading, drifting: drifting, lastInputAt: nil)
         if isMoving { lastActivityAt[identity.playerID] = .now }
+        await trackLap(playerID: identity.playerID, position: position)
     }
 
     /// The host changes its own status (UI hotkey / picker).
@@ -222,10 +254,14 @@ public actor HostSession {
     private func broadcastTick() async {
         tick &+= 1
         let players = world.map { id, player in
-            PlayerSnapshot(
+            var mode: UInt8 = 0
+            if kartByPlayer[id] != nil { mode |= PlayerMode.kart }
+            if player.drifting { mode |= PlayerMode.drifting }
+            return PlayerSnapshot(
                 id: PlayerWireID.prefix(fromHexID: id),
                 x: Float(player.position.x), y: Float(player.position.y),
-                facing: player.facing, isMoving: player.isMoving)
+                facing: player.facing, isMoving: player.isMoving,
+                mode: mode, heading: Float(player.heading))
         }
         let snapshot = WorldSnapshot(tick: tick, players: players)
         eventsContinuation.yield(.worldSnapshot(snapshot))
@@ -246,7 +282,7 @@ public actor HostSession {
         }
     }
 
-    private func applyInput(playerID: String, frame: InputFrame) {
+    private func applyInput(playerID: String, frame: InputFrame) async {
         guard var player = world[playerID] else { return }
         let now = ContinuousClock.now
         let dt: Double
@@ -257,17 +293,118 @@ public actor HostSession {
         } else {
             dt = 1.0 / 15
         }
+        let karted = kartByPlayer[playerID] != nil
+        let tuning = KartTuning.standard
         player.position = MovementSim.validate(
             previous: player.position,
             proposed: Vec2(x: Double(frame.x), y: Double(frame.y)),
             dt: dt,
-            collision: map.collision
+            collision: map.collision,
+            maxSpeed: karted ? tuning.maxSpeed : MovementRules.walkSpeed,
+            halfExtent: karted ? tuning.halfExtent : MovementRules.playerHalfExtent
         )
         player.facing = Facing.from(input: frame.input, previous: player.facing)
         player.isMoving = frame.input.isMoving
+        player.heading = Double(frame.heading)
+        player.drifting = karted && (frame.flags & InputFlags.drift) != 0
         player.lastInputAt = now
         world[playerID] = player
         if frame.input.isMoving { lastActivityAt[playerID] = now }
+        if karted {
+            await trackLap(playerID: playerID, position: player.position)
+        }
+    }
+
+    private func sessionSeconds() -> Double {
+        let elapsed = (ContinuousClock.now - sessionEpoch).components
+        return Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+    }
+
+    private func trackLap(playerID: String, position: Vec2) async {
+        guard kartByPlayer[playerID] != nil, !checkpoints.isEmpty else { return }
+        if case .lapCompleted(let seconds) =
+            lapTrackers[playerID]?.update(
+                position: position, checkpoints: checkpoints, now: sessionSeconds())
+        {
+            await recordLap(playerID: playerID, seconds: seconds)
+        }
+    }
+
+    // MARK: Race (ADR 0006: the host owns karts, the clock, and the board)
+
+    public func performRaceCommand(_ command: RaceCommand) async {
+        await handleRaceCommand(command, from: identity.playerID)
+    }
+
+    private func handleRaceCommand(_ command: RaceCommand, from playerID: String) async {
+        let wireID = PlayerWireID.prefix(fromHexID: playerID)
+        switch command {
+        case .mount(let kartID):
+            guard let index = raceState.karts.firstIndex(where: { $0.id == kartID }),
+                raceState.karts[index].ownerWireID == 0,
+                kartByPlayer[playerID] == nil,
+                let player = world[playerID],
+                player.position.distance(to: raceState.karts[index].position)
+                    <= RaceRules.mountReachTiles
+            else { return }
+            raceState.karts[index].ownerWireID = wireID
+            kartByPlayer[playerID] = kartID
+            lapTrackers[playerID] = LapTracker()
+            // The driver snaps to the kart; their next input takes it from there.
+            var mounted = player
+            mounted.position = raceState.karts[index].position
+            mounted.heading = Double(raceState.karts[index].heading)
+            world[playerID] = mounted
+            await broadcastRaceState()
+
+        case .dismount:
+            guard let kartID = kartByPlayer.removeValue(forKey: playerID),
+                let index = raceState.karts.firstIndex(where: { $0.id == kartID })
+            else { return }
+            lapTrackers.removeValue(forKey: playerID)
+            if let player = world[playerID] {
+                raceState.karts[index].x = Float(player.position.x)
+                raceState.karts[index].y = Float(player.position.y)
+                raceState.karts[index].heading = Float(player.heading)
+            }
+            raceState.karts[index].ownerWireID = 0
+            if var player = world[playerID] {
+                player.drifting = false
+                world[playerID] = player
+            }
+            await broadcastRaceState()
+
+        case .horn:
+            guard kartByPlayer[playerID] != nil else { return }
+            eventsContinuation.yield(.horn(from: wireID))
+            for memberID in members.keys {
+                try? await sendMessage(.raceEvent(hornFrom: wireID), to: memberID)
+            }
+        }
+    }
+
+    private func recordLap(playerID: String, seconds: Double) async {
+        let timeMs = UInt32((seconds * 1000).rounded())
+        let displayName =
+            playerID == identity.playerID
+            ? hostDisplayName
+            : members[playerID]?.entry.displayName ?? "?"
+        try? lapStore.insertLap(playerID: playerID, displayName: displayName, timeMs: Int(timeMs))
+        let isBest = ((try? lapStore.bestLap(playerID: playerID)) ?? nil).map { $0 == Int(timeMs) } ?? true
+        raceState.leaderboard = (try? lapStore.topLaps(limit: 10)) ?? raceState.leaderboard
+        if playerID == identity.playerID {
+            eventsContinuation.yield(.lapCompleted(timeMs: timeMs, isBest: isBest))
+        } else {
+            try? await sendMessage(.lapCompleted(timeMs: timeMs, isBest: isBest), to: playerID)
+        }
+        await broadcastRaceState()
+    }
+
+    private func broadcastRaceState() async {
+        eventsContinuation.yield(.raceStateChanged(raceState))
+        for playerID in members.keys {
+            try? await sendMessage(.raceState(raceState), to: playerID)
+        }
     }
 
     /// Returns true when any online player's away flag flipped. Cheap; runs
@@ -409,6 +546,7 @@ public actor HostSession {
                     hostAllowsUDP: allowUDP, roster: currentRoster()),
                 to: playerID)
             try await sendMessage(.deskState(deskState), to: playerID)
+            try await sendMessage(.raceState(raceState), to: playerID)
             await broadcastRoster()
 
             // Stay on the line for tunnel traffic until they leave or drop.
@@ -420,7 +558,7 @@ public actor HostSession {
                 case .worldFrame(let payload):
                     switch try? WorldPayload(decoding: [UInt8](payload)) {
                     case .input(let input):
-                        applyInput(playerID: playerID, frame: input)
+                        await applyInput(playerID: playerID, frame: input)
                     case .voice(_, let seq, let opus):
                         await fanOutVoice(fromPlayerID: playerID, seq: seq, opus: opus)
                     default:
@@ -441,6 +579,9 @@ public actor HostSession {
                 case .deskCommand(let command):
                     lastActivityAt[playerID] = .now
                     await handleDeskCommand(command, from: playerID)
+                case .raceCommand(let command):
+                    lastActivityAt[playerID] = .now
+                    await handleRaceCommand(command, from: playerID)
                 default:
                     break
                 }
@@ -594,6 +735,10 @@ public actor HostSession {
     }
 
     private func removeMember(_ playerID: String) async {
+        // A departing driver parks their kart in place.
+        if kartByPlayer[playerID] != nil {
+            await handleRaceCommand(.dismount, from: playerID)
+        }
         guard let member = members.removeValue(forKey: playerID) else { return }
         world.removeValue(forKey: playerID)
         statuses.removeValue(forKey: playerID)

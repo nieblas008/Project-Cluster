@@ -65,6 +65,14 @@ public enum SessionMessage: Equatable, Sendable {
     case deskState(DeskState)
     /// Joiner → host: a desk edit; the host validates, persists, rebroadcasts.
     case deskCommand(DeskCommand)
+    /// Host → everyone: kart assignments + parked poses + leaderboard (ADR 0006).
+    case raceState(RaceState)
+    /// Joiner → host: mount/dismount/horn; the host validates.
+    case raceCommand(RaceCommand)
+    /// Host → the lap's driver: your validated lap time.
+    case lapCompleted(timeMs: UInt32, isBest: Bool)
+    /// Host → everyone: transient race event (a horn, attenuated client-side).
+    case raceEvent(hornFrom: UInt64)
 
     private enum Kind: UInt8 {
         case joinHello = 1
@@ -78,6 +86,10 @@ public enum SessionMessage: Equatable, Sendable {
         case setStatus = 9
         case deskState = 10
         case deskCommand = 11
+        case raceState = 12
+        case raceCommand = 13
+        case lapCompleted = 14
+        case raceEvent = 15
     }
 
     public func encoded() throws -> [UInt8] {
@@ -121,6 +133,19 @@ public enum SessionMessage: Equatable, Sendable {
         case .deskCommand(let command):
             w.write(Kind.deskCommand.rawValue)
             try w.write(Data(command.encoded()))
+        case .raceState(let state):
+            w.write(Kind.raceState.rawValue)
+            try w.write(Data(state.encoded()))
+        case .raceCommand(let command):
+            w.write(Kind.raceCommand.rawValue)
+            try w.write(Data(command.encoded()))
+        case .lapCompleted(let timeMs, let isBest):
+            w.write(Kind.lapCompleted.rawValue)
+            w.write(timeMs)
+            w.write(isBest)
+        case .raceEvent(let hornFrom):
+            w.write(Kind.raceEvent.rawValue)
+            w.write(hornFrom)
         }
         return w.bytes
     }
@@ -164,6 +189,14 @@ public enum SessionMessage: Equatable, Sendable {
             self = .deskState(try DeskState(decoding: [UInt8](try r.readData())))
         case .deskCommand:
             self = .deskCommand(try DeskCommand(decoding: [UInt8](try r.readData())))
+        case .raceState:
+            self = .raceState(try RaceState(decoding: [UInt8](try r.readData())))
+        case .raceCommand:
+            self = .raceCommand(try RaceCommand(decoding: [UInt8](try r.readData())))
+        case .lapCompleted:
+            self = .lapCompleted(timeMs: try r.readUInt32(), isBest: try r.readBool())
+        case .raceEvent:
+            self = .raceEvent(hornFrom: try r.readUInt64())
         }
     }
 

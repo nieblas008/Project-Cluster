@@ -321,3 +321,37 @@ for (index, draw) in [
     draw(itemRect(index))
 }
 savePNG(itemsCtx, to: "Project Cluster/Resources/items.png")
+
+// MARK: Karts — 6 columns (5 presets + parked gray), top-down, pointing UP
+
+let kartsCtx = makeContext(width: 6 * tile, height: tile)
+let kartColors: [RGB] =
+    presets.map(\.1) + [RGB(r: 0.55, g: 0.55, b: 0.58)]
+
+for (column, rgb) in kartColors.enumerated() {
+    let originX = column * tile
+    let body = CGRect(x: originX + 9, y: 4, width: 14, height: 24)
+
+    // Wheels
+    kartsCtx.setFillColor(NSColor(srgbRed: 0.12, green: 0.12, blue: 0.14, alpha: 1).cgColor)
+    for wheelY in [6, 20] {
+        kartsCtx.fill(CGRect(x: originX + 5, y: wheelY, width: 4, height: 7))
+        kartsCtx.fill(CGRect(x: originX + 23, y: wheelY, width: 4, height: 7))
+    }
+    // Body
+    let bodyPath = CGPath(roundedRect: body, cornerWidth: 5, cornerHeight: 5, transform: nil)
+    kartsCtx.addPath(bodyPath)
+    kartsCtx.setFillColor(rgb.color.cgColor)
+    kartsCtx.fillPath()
+    kartsCtx.addPath(bodyPath)
+    kartsCtx.setStrokeColor(rgb.darker(0.6).cgColor)
+    kartsCtx.setLineWidth(1.5)
+    kartsCtx.strokePath()
+    // Windshield near the nose (top = the direction of travel)
+    kartsCtx.setFillColor(NSColor(srgbRed: 0.8, green: 0.9, blue: 0.95, alpha: 1).cgColor)
+    kartsCtx.fill(CGRect(x: originX + 11, y: 20, width: 10, height: 4))
+    // Seat
+    kartsCtx.setFillColor(rgb.darker(0.5).cgColor)
+    kartsCtx.fill(CGRect(x: originX + 12, y: 8, width: 8, height: 7))
+}
+savePNG(kartsCtx, to: "Project Cluster/Resources/karts.png")

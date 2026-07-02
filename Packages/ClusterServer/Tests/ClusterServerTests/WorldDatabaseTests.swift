@@ -80,4 +80,23 @@ import Testing
         try db.clearDeskItems(zone: "desk-01")
         #expect(try db.allDeskItems().isEmpty)
     }
+
+    @Test func lapTimesKeepPersonalBests() throws {
+        let db = try makeDatabase()
+        try db.insertLapTime(playerID: "aa", displayName: "Ricardo", timeMs: 45_000)
+        try db.insertLapTime(playerID: "aa", displayName: "Ricardo", timeMs: 41_500)
+        try db.insertLapTime(playerID: "aa", displayName: "Ricardo", timeMs: 48_000)
+        try db.insertLapTime(playerID: "bb", displayName: "Dana", timeMs: 43_000)
+
+        #expect(try db.bestLap(playerID: "aa") == 41_500)
+        #expect(try db.bestLap(playerID: "nobody") == nil)
+
+        let board = try db.bestLapTimes(limit: 10)
+        #expect(board.count == 2)
+        #expect(board[0].playerID == "aa" && board[0].timeMs == 41_500)
+        #expect(board[1].playerID == "bb" && board[1].timeMs == 43_000)
+
+        // Limit respected.
+        #expect(try db.bestLapTimes(limit: 1).count == 1)
+    }
 }

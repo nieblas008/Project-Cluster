@@ -9,10 +9,13 @@ import Testing
         let t = KartTuning.standard
         #expect(t.acceleration == 14)
         #expect(t.maxSpeed == 12)
+        #expect(t.maxReverseSpeed == 3)
         #expect(t.braking == 24)
         #expect(t.coastDrag == 6)
         #expect(t.turnRate == 2.6)
-        #expect(t.driftGrip == 0.35)
+        #expect(t.driftTurnBoost == 1.6)
+        #expect(t.wallSpeedRetention == 0.3)
+        #expect(t.halfExtent == 0.35)
     }
 
     @Test func kartsOutrunWalking() {

@@ -20,16 +20,27 @@ public struct PlayerSnapshot: Equatable, Sendable {
     public var y: Float
     public var facing: Facing
     public var isMoving: Bool
+    /// Bitfield — see `PlayerMode` (kart, drifting). 0 = walking.
+    public var mode: UInt8
+    /// Kart heading in radians (tile space); meaningful when karted.
+    public var heading: Float
 
-    public init(id: UInt64, x: Float, y: Float, facing: Facing, isMoving: Bool) {
+    public init(
+        id: UInt64, x: Float, y: Float, facing: Facing, isMoving: Bool,
+        mode: UInt8 = 0, heading: Float = 0
+    ) {
         self.id = id
         self.x = x
         self.y = y
         self.facing = facing
         self.isMoving = isMoving
+        self.mode = mode
+        self.heading = heading
     }
 
     public var position: Vec2 { Vec2(x: Double(x), y: Double(y)) }
+    public var isKarted: Bool { mode & PlayerMode.kart != 0 }
+    public var isDrifting: Bool { mode & PlayerMode.drifting != 0 }
 }
 
 /// Host → everyone, 15 times a second, latest-wins.
@@ -49,12 +60,21 @@ public struct InputFrame: Equatable, Sendable {
     public var input: MoveInput
     public var x: Float
     public var y: Float
+    /// Bitfield — see `InputFlags` (drift). Heading rides along so the host
+    /// can reflect it in snapshots without simulating the kart.
+    public var flags: UInt8
+    public var heading: Float
 
-    public init(seq: UInt32, input: MoveInput, x: Float, y: Float) {
+    public init(
+        seq: UInt32, input: MoveInput, x: Float, y: Float,
+        flags: UInt8 = 0, heading: Float = 0
+    ) {
         self.seq = seq
         self.input = input
         self.x = x
         self.y = y
+        self.flags = flags
+        self.heading = heading
     }
 }
 
@@ -84,6 +104,8 @@ public enum WorldPayload: Equatable, Sendable {
             w.write(frame.input.dirY)
             w.write(frame.x)
             w.write(frame.y)
+            w.write(frame.flags)
+            w.write(frame.heading)
         case .snapshot(let snapshot):
             w.write(Kind.snapshot.rawValue)
             w.write(snapshot.tick)
@@ -95,6 +117,8 @@ public enum WorldPayload: Equatable, Sendable {
                 w.write(player.y)
                 w.write(player.facing.rawValue)
                 w.write(player.isMoving)
+                w.write(player.mode)
+                w.write(player.heading)
             }
         case .voice(let speakerID, let seq, let opus):
             w.write(Kind.voice.rawValue)
@@ -115,7 +139,9 @@ public enum WorldPayload: Equatable, Sendable {
                     seq: try r.readUInt32(),
                     input: MoveInput(dirX: try r.readInt8(), dirY: try r.readInt8()),
                     x: try r.readFloat(),
-                    y: try r.readFloat()
+                    y: try r.readFloat(),
+                    flags: try r.readUInt8(),
+                    heading: try r.readFloat()
                 ))
         case .snapshot:
             let tick = try r.readUInt32()
@@ -131,7 +157,8 @@ public enum WorldPayload: Equatable, Sendable {
                 }
                 players.append(
                     PlayerSnapshot(
-                        id: id, x: x, y: y, facing: facing, isMoving: try r.readBool()))
+                        id: id, x: x, y: y, facing: facing, isMoving: try r.readBool(),
+                        mode: try r.readUInt8(), heading: try r.readFloat()))
             }
             self = .snapshot(WorldSnapshot(tick: tick, players: players))
         case .voice:
@@ -172,6 +199,7 @@ public struct RemotePlayerInterpolator: Sendable {
                 blended.y = Float(lerp(Double(s0.y), Double(s1.y), t: t))
                 blended.facing = t < 0.5 ? s0.facing : s1.facing
                 blended.isMoving = s1.isMoving || s0.isMoving
+                blended.heading = Float(lerpAngle(Double(s0.heading), Double(s1.heading), t: t))
                 return blended
             }
         }
