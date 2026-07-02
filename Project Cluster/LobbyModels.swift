@@ -23,6 +23,7 @@ final class HostLobbyModel {
     private(set) var roster: [RosterEntry] = []
     private(set) var knocks: [Knock] = []
     private(set) var errorMessage: String?
+    private(set) var deskState = DeskState()
     var inWorld = false
 
     let voice = VoiceController()
@@ -46,6 +47,11 @@ final class HostLobbyModel {
         Task { await session?.setLocalStatus(status) }
     }
 
+    func performDesk(_ command: DeskCommand) {
+        let session = session
+        Task { await session?.performDeskCommand(command) }
+    }
+
     func start(
         endpoint: RelayEndpoint, identity: PlayerIdentity, displayName: String,
         avatarPreset: String, map: WorldMap, allowUDP: Bool, status: PlayerStatus
@@ -66,7 +72,8 @@ final class HostLobbyModel {
                     hostAvatarPreset: avatarPreset,
                     map: map,
                     allowUDP: allowUDP,
-                    initialStatus: status
+                    initialStatus: status,
+                    deskStore: WorldDeskStoreAdapter(database: database)
                 )
                 self.session = session
                 self.consumeEvents(of: session)
@@ -95,6 +102,9 @@ final class HostLobbyModel {
                     self.voice.updateProximity(snapshot: snapshot)
                 case .voiceReceived(let speakerID, let seq, let opus):
                     self.voice.receive(speakerID: speakerID, seq: seq, opus: opus)
+                case .deskStateChanged(let deskState):
+                    self.deskState = deskState
+                    self.scene?.applyDeskState(deskState)
                 case .ended(let reason):
                     if self.state != .idle {
                         self.errorMessage = reason
@@ -124,6 +134,7 @@ final class HostLobbyModel {
         state = .idle
         roster = []
         knocks = []
+        deskState = DeskState()
         inWorld = false
         voice.stop()
     }
@@ -157,6 +168,7 @@ final class JoinLobbyModel {
     private(set) var state: State = .idle
     private(set) var roster: [RosterEntry] = []
     private(set) var usingUDP: Bool?
+    private(set) var deskState = DeskState()
 
     let voice = VoiceController()
     weak var scene: WorldScene? {
@@ -178,6 +190,11 @@ final class JoinLobbyModel {
         voice.applyStatus(status)
         let session = session
         Task { await session?.setStatus(status) }
+    }
+
+    func performDesk(_ command: DeskCommand) {
+        let session = session
+        Task { await session?.sendDeskCommand(command) }
     }
 
     func join(
@@ -214,6 +231,9 @@ final class JoinLobbyModel {
                     self.voice.updateProximity(snapshot: snapshot)
                 case .voiceReceived(let speakerID, let seq, let opus):
                     self.voice.receive(speakerID: speakerID, seq: seq, opus: opus)
+                case .deskState(let deskState):
+                    self.deskState = deskState
+                    self.scene?.applyDeskState(deskState)
                 case .denied(let reason):
                     self.state = .denied(reason: reason)
                     self.roster = []
@@ -239,6 +259,7 @@ final class JoinLobbyModel {
         state = .idle
         roster = []
         usingUDP = nil
+        deskState = DeskState()
         voice.stop()
         Task { await session?.leave() }
     }

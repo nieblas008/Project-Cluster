@@ -48,4 +48,36 @@ import Testing
         let db = try makeDatabase()
         #expect(try db.fetchPlayer(publicKey: "nope") == nil)
     }
+
+    @Test func deskClaimsPersistAndRelease() throws {
+        let db = try makeDatabase()
+        try db.setDeskClaim(zone: "desk-01", ownerID: "ricardo")
+        try db.setDeskClaim(zone: "desk-02", ownerID: "dana")
+        #expect(try db.allDeskClaims().count == 2)
+
+        // Re-claim overwrites; release deletes the row.
+        try db.setDeskClaim(zone: "desk-01", ownerID: "someone-else")
+        #expect(
+            try db.allDeskClaims().first { $0.zone == "desk-01" }?.ownerID == "someone-else")
+        try db.setDeskClaim(zone: "desk-01", ownerID: "")
+        #expect(try db.allDeskClaims().map(\.zone) == ["desk-02"])
+    }
+
+    @Test func deskItemsGetStableIDsAndMutate() throws {
+        let db = try makeDatabase()
+        let first = try db.insertDeskItem(zone: "desk-01", catalogID: 5, x: 10, y: 12, rotation: 0)
+        let second = try db.insertDeskItem(zone: "desk-01", catalogID: 16, x: 10.5, y: 12, rotation: 1)
+        #expect(second > first)  // monotonic host-assigned handles
+
+        try db.moveDeskItem(id: first, x: 11, y: 12.5, rotation: 2)
+        let items = try db.allDeskItems()
+        #expect(items.count == 2)
+        #expect(items[0].x == 11 && items[0].rotation == 2)
+
+        try db.removeDeskItem(id: second)
+        #expect(try db.allDeskItems().count == 1)
+
+        try db.clearDeskItems(zone: "desk-01")
+        #expect(try db.allDeskItems().isEmpty)
+    }
 }

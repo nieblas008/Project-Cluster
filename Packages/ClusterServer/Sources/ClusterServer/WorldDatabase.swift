@@ -62,6 +62,21 @@ public final class WorldDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v2-desks") { db in
+            try db.create(table: DeskClaimRecord.databaseTableName) { t in
+                t.primaryKey("zone", .text)
+                t.column("ownerID", .text).notNull()
+            }
+            try db.create(table: DeskItemRecord.databaseTableName) { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("zone", .text).notNull().indexed()
+                t.column("catalogID", .integer).notNull()
+                t.column("x", .double).notNull()
+                t.column("y", .double).notNull()
+                t.column("rotation", .integer).notNull()
+            }
+        }
+
         return migrator
     }
 
@@ -132,6 +147,66 @@ public final class WorldDatabase: Sendable {
             if var player = try PlayerRecord.fetchOne(db, key: publicKey) {
                 player.statusPreference = statusPreference
                 try player.update(db)
+            }
+        }
+    }
+
+    // MARK: - Desks (ADR 0005)
+
+    public func allDeskClaims() throws -> [DeskClaimRecord] {
+        try dbQueue.read { db in
+            try DeskClaimRecord.fetchAll(db)
+        }
+    }
+
+    public func allDeskItems() throws -> [DeskItemRecord] {
+        try dbQueue.read { db in
+            try DeskItemRecord.order(Column("id")).fetchAll(db)
+        }
+    }
+
+    /// Empty ownerID releases the claim (the row is deleted).
+    public func setDeskClaim(zone: String, ownerID: String) throws {
+        try dbQueue.write { db in
+            if ownerID.isEmpty {
+                _ = try DeskClaimRecord.deleteOne(db, key: zone)
+            } else {
+                try DeskClaimRecord(zone: zone, ownerID: ownerID).save(db)
+            }
+        }
+    }
+
+    public func clearDeskItems(zone: String) throws {
+        try dbQueue.write { db in
+            _ = try DeskItemRecord.filter(Column("zone") == zone).deleteAll(db)
+        }
+    }
+
+    /// Returns the host-assigned item id (the rowid).
+    public func insertDeskItem(
+        zone: String, catalogID: Int, x: Double, y: Double, rotation: Int
+    ) throws -> Int64 {
+        try dbQueue.write { db in
+            var record = DeskItemRecord(
+                zone: zone, catalogID: catalogID, x: x, y: y, rotation: rotation)
+            try record.insert(db)
+            return record.id!
+        }
+    }
+
+    public func removeDeskItem(id: Int64) throws {
+        try dbQueue.write { db in
+            _ = try DeskItemRecord.deleteOne(db, key: id)
+        }
+    }
+
+    public func moveDeskItem(id: Int64, x: Double, y: Double, rotation: Int) throws {
+        try dbQueue.write { db in
+            if var item = try DeskItemRecord.fetchOne(db, key: id) {
+                item.x = x
+                item.y = y
+                item.rotation = rotation
+                try item.update(db)
             }
         }
     }

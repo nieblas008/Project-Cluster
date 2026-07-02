@@ -174,3 +174,150 @@ for (row, preset) in presets.enumerated() {
     }
 }
 savePNG(avatarsCtx, to: "Project Cluster/Resources/avatars.png")
+
+// MARK: Desk items — 8 columns × 5 category rows (ADR 0005 sprite indices)
+
+let itemsCtx = makeContext(width: 8 * tile, height: 5 * tile)
+
+func itemRect(_ spriteIndex: Int) -> CGRect {
+    let col = spriteIndex % 8
+    let row = spriteIndex / 8
+    return CGRect(x: col * tile, y: (5 - 1 - row) * tile, width: tile, height: tile)
+}
+
+func fillCircle(_ r: CGRect, _ c: NSColor) {
+    itemsCtx.setFillColor(c.cgColor)
+    itemsCtx.fillEllipse(in: r)
+}
+func fillRect(_ r: CGRect, _ c: NSColor) {
+    itemsCtx.setFillColor(c.cgColor)
+    itemsCtx.fill(r)
+}
+
+let pot = NSColor(srgbRed: 0.72, green: 0.45, blue: 0.3, alpha: 1)
+let leaf = NSColor(srgbRed: 0.32, green: 0.65, blue: 0.38, alpha: 1)
+let dark = NSColor(srgbRed: 0.18, green: 0.19, blue: 0.22, alpha: 1)
+let metal = NSColor(srgbRed: 0.62, green: 0.65, blue: 0.7, alpha: 1)
+let gold = NSColor(srgbRed: 0.92, green: 0.76, blue: 0.28, alpha: 1)
+
+for (index, draw) in [
+    // plants
+    (0, { (r: CGRect) in
+        fillRect(CGRect(x: r.midX - 6, y: r.minY + 4, width: 12, height: 8), pot)
+        fillCircle(CGRect(x: r.midX - 8, y: r.minY + 11, width: 16, height: 14), leaf)
+    }),
+    (1, { r in
+        fillRect(CGRect(x: r.midX - 5, y: r.minY + 3, width: 10, height: 7), pot)
+        fillCircle(CGRect(x: r.midX - 7, y: r.minY + 9, width: 14, height: 20), leaf)
+    }),
+    (2, { r in
+        fillRect(CGRect(x: r.midX - 6, y: r.minY + 4, width: 12, height: 6), pot)
+        fillRect(CGRect(x: r.midX - 3, y: r.minY + 9, width: 6, height: 16), leaf)
+        fillRect(CGRect(x: r.midX - 9, y: r.minY + 14, width: 6, height: 4), leaf)
+    }),
+    (3, { r in
+        fillCircle(CGRect(x: r.minX + 4, y: r.maxY - 12, width: 10, height: 8), leaf)
+        fillCircle(CGRect(x: r.midX, y: r.maxY - 16, width: 12, height: 10), leaf)
+        fillRect(CGRect(x: r.midX - 1, y: r.minY + 6, width: 2, height: 14), leaf)
+    }),
+    // tech
+    (8, { r in
+        fillRect(CGRect(x: r.minX + 5, y: r.minY + 10, width: 22, height: 14), dark)
+        fillRect(CGRect(x: r.midX - 3, y: r.minY + 5, width: 6, height: 6), metal)
+    }),
+    (9, { r in
+        fillRect(CGRect(x: r.minX + 2, y: r.minY + 10, width: 13, height: 12), dark)
+        fillRect(CGRect(x: r.minX + 17, y: r.minY + 10, width: 13, height: 12), dark)
+    }),
+    (10, { r in
+        fillRect(CGRect(x: r.minX + 6, y: r.minY + 6, width: 20, height: 4), metal)
+        fillRect(CGRect(x: r.minX + 7, y: r.minY + 10, width: 18, height: 12), dark)
+    }),
+    (11, { r in
+        fillRect(CGRect(x: r.minX + 4, y: r.midY - 5, width: 24, height: 10), metal)
+    }),
+    (12, { r in
+        itemsCtx.setStrokeColor(dark.cgColor)
+        itemsCtx.setLineWidth(3)
+        itemsCtx.strokeEllipse(in: CGRect(x: r.midX - 8, y: r.midY - 4, width: 16, height: 14))
+        fillCircle(CGRect(x: r.midX - 11, y: r.midY - 6, width: 7, height: 9), dark)
+        fillCircle(CGRect(x: r.midX + 4, y: r.midY - 6, width: 7, height: 9), dark)
+    }),
+    // comfort
+    (16, { r in
+        fillRect(CGRect(x: r.midX - 1, y: r.minY + 5, width: 2, height: 12), metal)
+        fillCircle(CGRect(x: r.midX - 7, y: r.minY + 15, width: 14, height: 10), gold)
+    }),
+    (17, { r in
+        fillRect(CGRect(x: r.midX - 6, y: r.minY + 8, width: 12, height: 12), NSColor(srgbRed: 0.85, green: 0.4, blue: 0.35, alpha: 1))
+        itemsCtx.setStrokeColor(dark.cgColor)
+        itemsCtx.setLineWidth(2)
+        itemsCtx.strokeEllipse(in: CGRect(x: r.midX + 5, y: r.minY + 11, width: 6, height: 6))
+    }),
+    (18, { r in
+        fillRect(CGRect(x: r.minX + 6, y: r.minY + 6, width: 6, height: 18), NSColor(srgbRed: 0.55, green: 0.35, blue: 0.4, alpha: 1))
+        fillRect(CGRect(x: r.minX + 13, y: r.minY + 6, width: 6, height: 16), NSColor(srgbRed: 0.35, green: 0.5, blue: 0.6, alpha: 1))
+        fillRect(CGRect(x: r.minX + 20, y: r.minY + 6, width: 6, height: 17), gold)
+    }),
+    (19, { r in
+        fillRect(CGRect(x: r.midX - 9, y: r.midY - 11, width: 18, height: 22), gold)
+        fillRect(CGRect(x: r.midX - 6, y: r.midY - 8, width: 12, height: 16), NSColor(srgbRed: 0.75, green: 0.85, blue: 0.9, alpha: 1))
+    }),
+    (20, { r in
+        fillCircle(CGRect(x: r.midX - 10, y: r.midY - 10, width: 20, height: 20), NSColor.white)
+        itemsCtx.setStrokeColor(dark.cgColor)
+        itemsCtx.setLineWidth(2)
+        itemsCtx.strokeLineSegments(between: [CGPoint(x: r.midX, y: r.midY), CGPoint(x: r.midX, y: r.midY + 7)])
+        itemsCtx.strokeLineSegments(between: [CGPoint(x: r.midX, y: r.midY), CGPoint(x: r.midX + 5, y: r.midY)])
+    }),
+    // fun
+    (24, { r in
+        fillRect(CGRect(x: r.midX - 5, y: r.minY + 4, width: 10, height: 4), metal)
+        fillRect(CGRect(x: r.midX - 4, y: r.minY + 8, width: 8, height: 16), NSColor(srgbRed: 0.6, green: 0.3, blue: 0.7, alpha: 1))
+        fillCircle(CGRect(x: r.midX - 3, y: r.minY + 10, width: 6, height: 6), NSColor(srgbRed: 0.95, green: 0.5, blue: 0.6, alpha: 1))
+        fillCircle(CGRect(x: r.midX - 2, y: r.minY + 18, width: 4, height: 4), NSColor(srgbRed: 0.95, green: 0.5, blue: 0.6, alpha: 1))
+    }),
+    (25, { r in
+        fillCircle(CGRect(x: r.midX - 8, y: r.minY + 4, width: 16, height: 12), NSColor(srgbRed: 0.45, green: 0.42, blue: 0.4, alpha: 1))
+        fillCircle(CGRect(x: r.midX - 6, y: r.minY + 14, width: 12, height: 10), NSColor(srgbRed: 0.45, green: 0.42, blue: 0.4, alpha: 1))
+        itemsCtx.setFillColor(NSColor(srgbRed: 0.45, green: 0.42, blue: 0.4, alpha: 1).cgColor)
+        itemsCtx.fill(CGRect(x: r.midX - 7, y: r.minY + 21, width: 4, height: 5))
+        itemsCtx.fill(CGRect(x: r.midX + 3, y: r.minY + 21, width: 4, height: 5))
+    }),
+    (26, { r in
+        fillCircle(CGRect(x: r.midX - 9, y: r.minY + 5, width: 15, height: 12), gold)
+        fillCircle(CGRect(x: r.midX + 1, y: r.minY + 12, width: 9, height: 9), gold)
+        fillRect(CGRect(x: r.midX + 8, y: r.minY + 15, width: 5, height: 3), NSColor(srgbRed: 0.9, green: 0.5, blue: 0.2, alpha: 1))
+    }),
+    (27, { r in
+        fillRect(CGRect(x: r.midX - 7, y: r.minY + 4, width: 14, height: 20), dark)
+        fillCircle(CGRect(x: r.midX - 5, y: r.minY + 6, width: 10, height: 10), metal)
+        fillCircle(CGRect(x: r.midX - 3, y: r.minY + 17, width: 6, height: 6), metal)
+    }),
+    // trophies
+    (32, { r in
+        fillRect(CGRect(x: r.midX - 8, y: r.minY + 3, width: 16, height: 4), gold)
+        fillRect(CGRect(x: r.midX - 2, y: r.minY + 7, width: 4, height: 5), gold)
+        fillCircle(CGRect(x: r.midX - 8, y: r.minY + 11, width: 16, height: 13), gold)
+        fillRect(CGRect(x: r.midX - 5, y: r.minY + 14, width: 10, height: 5), dark)
+    }),
+    (33, { r in
+        fillRect(CGRect(x: r.midX - 8, y: r.minY + 3, width: 16, height: 4), gold)
+        fillRect(CGRect(x: r.midX - 2, y: r.minY + 7, width: 4, height: 6), gold)
+        let starCenter = CGPoint(x: r.midX, y: r.minY + 19)
+        let star = CGMutablePath()
+        for i in 0..<10 {
+            let radius: CGFloat = i % 2 == 0 ? 9 : 4
+            let angle = CGFloat(i) * .pi / 5 - .pi / 2
+            let point = CGPoint(x: starCenter.x + radius * cos(angle), y: starCenter.y + radius * sin(angle))
+            if i == 0 { star.move(to: point) } else { star.addLine(to: point) }
+        }
+        star.closeSubpath()
+        itemsCtx.addPath(star)
+        itemsCtx.setFillColor(gold.cgColor)
+        itemsCtx.fillPath()
+    }),
+] {
+    draw(itemRect(index))
+}
+savePNG(itemsCtx, to: "Project Cluster/Resources/items.png")

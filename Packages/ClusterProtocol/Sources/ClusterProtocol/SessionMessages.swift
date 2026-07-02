@@ -60,6 +60,11 @@ public enum SessionMessage: Equatable, Sendable {
     /// Joiner → host: change my status (available/focus/dnd). The host persists
     /// it and rebroadcasts the roster.
     case setStatus(PlayerStatus)
+    /// Host → everyone: the full desk world (claims + placements), sent after
+    /// welcome and on every change (ADR 0005).
+    case deskState(DeskState)
+    /// Joiner → host: a desk edit; the host validates, persists, rebroadcasts.
+    case deskCommand(DeskCommand)
 
     private enum Kind: UInt8 {
         case joinHello = 1
@@ -71,6 +76,8 @@ public enum SessionMessage: Equatable, Sendable {
         case worldFrame = 7
         case transportSelected = 8
         case setStatus = 9
+        case deskState = 10
+        case deskCommand = 11
     }
 
     public func encoded() throws -> [UInt8] {
@@ -108,6 +115,12 @@ public enum SessionMessage: Equatable, Sendable {
         case .setStatus(let status):
             w.write(Kind.setStatus.rawValue)
             w.write(status.rawValue)
+        case .deskState(let state):
+            w.write(Kind.deskState.rawValue)
+            try w.write(Data(state.encoded()))
+        case .deskCommand(let command):
+            w.write(Kind.deskCommand.rawValue)
+            try w.write(Data(command.encoded()))
         }
         return w.bytes
     }
@@ -147,6 +160,10 @@ public enum SessionMessage: Equatable, Sendable {
                 throw CodecError.invalidValue
             }
             self = .setStatus(status)
+        case .deskState:
+            self = .deskState(try DeskState(decoding: [UInt8](try r.readData())))
+        case .deskCommand:
+            self = .deskCommand(try DeskCommand(decoding: [UInt8](try r.readData())))
         }
     }
 

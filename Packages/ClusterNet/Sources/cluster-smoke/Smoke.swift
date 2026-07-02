@@ -36,7 +36,7 @@ struct Smoke {
 
         if outcome {
             print(
-                "SMOKE OK — roster, walk, voice, and status all good, "
+                "SMOKE OK — roster, walk, voice, status, and desks all good, "
                     + "transport=\(forceTCP ? "tcp" : "udp")")
             exit(0)
         } else {
@@ -52,6 +52,8 @@ struct Smoke {
         private var _hostVoiceFrames = 0
         private var _joinerVoiceFrames = 0
         private var _joinerStatusOnHost: PlayerStatus?
+        private var _deskOnHost = false
+        private var _deskOnJoiner = false
         private var _failure: String?
 
         var walked: Bool { lock.withLock { _walked } }
@@ -59,6 +61,8 @@ struct Smoke {
         var hostVoiceFrames: Int { lock.withLock { _hostVoiceFrames } }
         var joinerVoiceFrames: Int { lock.withLock { _joinerVoiceFrames } }
         var joinerStatusOnHost: PlayerStatus? { lock.withLock { _joinerStatusOnHost } }
+        var deskOnHost: Bool { lock.withLock { _deskOnHost } }
+        var deskOnJoiner: Bool { lock.withLock { _deskOnJoiner } }
         var failure: String? { lock.withLock { _failure } }
 
         func markWalked() { lock.withLock { _walked = true } }
@@ -66,6 +70,8 @@ struct Smoke {
         func addHostVoiceFrame() { lock.withLock { _hostVoiceFrames += 1 } }
         func addJoinerVoiceFrame() { lock.withLock { _joinerVoiceFrames += 1 } }
         func setJoinerStatusOnHost(_ s: PlayerStatus) { lock.withLock { _joinerStatusOnHost = s } }
+        func markDeskOnHost() { lock.withLock { _deskOnHost = true } }
+        func markDeskOnJoiner() { lock.withLock { _deskOnJoiner = true } }
         func markFailure(_ reason: String) { lock.withLock { _failure = _failure ?? reason } }
     }
 
@@ -86,7 +92,8 @@ struct Smoke {
                {"name":"floor","type":"tilelayer","data":\(Array(repeating: 1, count: 96))},
                {"name":"walls","type":"tilelayer","data":\(data)},
                {"name":"objects","type":"objectgroup","objects":[
-                 {"name":"spawn","type":"spawn","x":96.0,"y":96.0}]}],
+                 {"name":"spawn","type":"spawn","x":96.0,"y":96.0},
+                 {"name":"desk-01","type":"desk","x":160.0,"y":128.0,"width":32.0,"height":32.0}]}],
              "tilesets":[{"firstgid":1,"tiles":[
                {"id":1,"properties":[{"name":"collides","type":"bool","value":true}]}]}]}
             """
@@ -150,6 +157,12 @@ struct Smoke {
                         }) {
                             results.setJoinerStatusOnHost(joiner.status)
                         }
+                    case .deskStateChanged(let state):
+                        if state.owner(of: "desk-01") == joinerIdentity.playerID,
+                            !state.items(in: "desk-01").isEmpty
+                        {
+                            results.markDeskOnHost()
+                        }
                     case .ended(let reason):
                         results.markFailure("host ended: \(reason)")
                         return
@@ -194,6 +207,12 @@ struct Smoke {
                         if let pcm = try? decoder?.decode(opus), pcm.rmsLevel > 0.01 {
                             results.addJoinerVoiceFrame()
                         }
+                    case .deskState(let state):
+                        if state.owner(of: "desk-01") == joinerIdentity.playerID,
+                            !state.items(in: "desk-01").isEmpty
+                        {
+                            results.markDeskOnJoiner()
+                        }
                     case .denied(let reason), .ended(let reason):
                         results.markFailure("joiner ended: \(reason)")
                         return
@@ -232,6 +251,15 @@ struct Smoke {
             let statusOK = await waitUntil { results.joinerStatusOnHost == .dnd }
             print("smoke: host sees joiner status = \(results.joinerStatusOnHost?.label ?? "nil")")
 
+            // Phase: desks — claim, decorate, and both sides must see it.
+            await joiner.sendDeskCommand(.claim(zone: "desk-01"))
+            await joiner.sendDeskCommand(
+                .place(zone: "desk-01", catalogID: 15, x: 5.4, y: 4.6, rotation: 0))
+            let deskOK = await waitUntil { results.deskOnHost && results.deskOnJoiner }
+            print(
+                "smoke: desk claimed+decorated — host sees it: \(results.deskOnHost), "
+                    + "joiner sees it: \(results.deskOnJoiner)")
+
             hostConsumer.cancel()
             joinerConsumer.cancel()
             await joiner.leave()
@@ -245,7 +273,7 @@ struct Smoke {
                 print("smoke: transport mismatch (forceTCP=\(forceTCP))")
                 return false
             }
-            return voiceOK && results.walked && statusOK
+            return voiceOK && results.walked && statusOK && deskOK
         } catch {
             print("smoke: error \(error)")
             return false

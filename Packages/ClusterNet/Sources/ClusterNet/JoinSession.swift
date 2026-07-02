@@ -13,6 +13,8 @@ public enum JoinSessionEvent: Sendable {
     case worldSnapshot(WorldSnapshot)
     /// A speaker within earshot (the host already proximity-filtered).
     case voiceReceived(speakerID: UInt64, seq: UInt32, opus: Data)
+    /// The full desk world, after welcome and on every change (ADR 0005).
+    case deskState(DeskState)
     case denied(reason: String)
     case ended(reason: String)
 }
@@ -60,6 +62,11 @@ public actor JoinSession {
     /// Change my status; the host persists it and rebroadcasts the roster.
     public func setStatus(_ status: PlayerStatus) async {
         await sendSealed(.setStatus(status))
+    }
+
+    /// A desk edit — the host validates and answers with a deskState broadcast.
+    public func sendDeskCommand(_ command: DeskCommand) async {
+        await sendSealed(.deskCommand(command))
     }
 
     public func start(code rawCode: String) async {
@@ -193,7 +200,9 @@ public actor JoinSession {
                 case .leave:
                     eventsContinuation.yield(.ended(reason: "The host ended the session."))
                     return
-                case .joinHello, .transportSelected, .setStatus:
+                case .deskState(let state):
+                    eventsContinuation.yield(.deskState(state))
+                case .joinHello, .transportSelected, .setStatus, .deskCommand:
                     throw ConnectionError.protocolViolation
                 }
             }

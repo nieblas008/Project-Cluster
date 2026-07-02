@@ -51,3 +51,47 @@ struct WorldDirectoryAdapter: HostDirectory {
         )
     }
 }
+
+/// Desk persistence over the world database (ADR 0005).
+struct WorldDeskStoreAdapter: DeskStore {
+    let database: WorldDatabase
+
+    func loadDeskState() throws -> DeskState {
+        DeskState(
+            claims: try database.allDeskClaims().map {
+                DeskClaim(zone: $0.zone, ownerID: $0.ownerID)
+            },
+            items: try database.allDeskItems().compactMap { record in
+                guard let id = record.id else { return nil }
+                return PlacedItem(
+                    id: UInt32(id), zone: record.zone, catalogID: UInt16(record.catalogID),
+                    x: Float(record.x), y: Float(record.y), rotation: UInt8(record.rotation))
+            })
+    }
+
+    func setClaim(zone: String, ownerID: String) throws {
+        try database.setDeskClaim(zone: zone, ownerID: ownerID)
+    }
+
+    func clearItems(zone: String) throws {
+        try database.clearDeskItems(zone: zone)
+    }
+
+    func insertItem(zone: String, catalogID: UInt16, x: Float, y: Float, rotation: UInt8) throws
+        -> UInt32
+    {
+        UInt32(
+            try database.insertDeskItem(
+                zone: zone, catalogID: Int(catalogID), x: Double(x), y: Double(y),
+                rotation: Int(rotation)))
+    }
+
+    func removeItem(id: UInt32) throws {
+        try database.removeDeskItem(id: Int64(id))
+    }
+
+    func moveItem(id: UInt32, x: Float, y: Float, rotation: UInt8) throws {
+        try database.moveDeskItem(
+            id: Int64(id), x: Double(x), y: Double(y), rotation: Int(rotation))
+    }
+}

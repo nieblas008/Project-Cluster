@@ -36,6 +36,49 @@ public struct PlayerRecord: Codable, Equatable, Sendable, FetchableRecord, Persi
     }
 }
 
+/// A claimed desk zone (ADR 0005). Unclaimed desks simply have no row.
+public struct DeskClaimRecord: Codable, Equatable, Sendable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "deskClaims"
+
+    /// Map zone name, e.g. "desk-07".
+    public var zone: String
+    /// Hex identity key of the owner.
+    public var ownerID: String
+
+    public init(zone: String, ownerID: String) {
+        self.zone = zone
+        self.ownerID = ownerID
+    }
+}
+
+/// One placed decoration. The row id is the item's stable wire handle
+/// (host-assigned, ADR 0005).
+public struct DeskItemRecord: Codable, Equatable, Sendable, FetchableRecord,
+    MutablePersistableRecord
+{
+    public static let databaseTableName = "deskItems"
+
+    public var id: Int64?
+    public var zone: String
+    public var catalogID: Int
+    public var x: Double
+    public var y: Double
+    public var rotation: Int
+
+    public init(id: Int64? = nil, zone: String, catalogID: Int, x: Double, y: Double, rotation: Int) {
+        self.id = id
+        self.zone = zone
+        self.catalogID = catalogID
+        self.x = x
+        self.y = y
+        self.rotation = rotation
+    }
+
+    public mutating func didInsert(_ inserted: InsertionSuccess) {
+        id = inserted.rowID
+    }
+}
+
 /// The single world this Mac hosts. Always row id = 1 — multi-space is a
 /// product question for another year.
 public struct SpaceRecord: Codable, Equatable, Sendable, FetchableRecord, PersistableRecord {

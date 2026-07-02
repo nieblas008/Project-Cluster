@@ -25,6 +25,7 @@ final class WorldScene: SKScene {
 
     private var tilesTexture: SKTexture?
     private var avatarsTexture: SKTexture?
+    private var itemsTexture: SKTexture?
 
     private var localNode: AvatarNode?
     private var localPosition: Vec2?
@@ -39,6 +40,15 @@ final class WorldScene: SKScene {
         var status: PlayerStatus
         var isAway: Bool
     }
+
+    private var itemNodes: [UInt32: SKSpriteNode] = [:]
+    private var editHighlight: SKShapeNode?
+    /// Read by the HUD (main thread) to know which desk zone I'm standing in.
+    private(set) var localPositionSnapshot: Vec2?
+    /// Set while the decorate panel is open; enables click placement/removal.
+    var onTilePicked: ((Vec2) -> Void)?
+    var onItemPicked: ((UInt32) -> Void)?
+    private var editingEnabled = false
 
     private var interpolators: [UInt64: RemotePlayerInterpolator] = [:]
     private var remoteNodes: [UInt64: AvatarNode] = [:]
@@ -81,6 +91,71 @@ final class WorldScene: SKScene {
         for (id, node) in remoteNodes {
             node.setSpeaking(ids.contains(id))
         }
+    }
+
+    func applyDeskState(_ state: DeskState) {
+        var seen = Set<UInt32>()
+        for item in state.items {
+            seen.insert(item.id)
+            let node =
+                itemNodes[item.id]
+                ?? {
+                    let created = SKSpriteNode(texture: nil)
+                    created.size = CGSize(width: 26, height: 26)
+                    created.zPosition = 2  // above floor, below avatars
+                    addChild(created)
+                    itemNodes[item.id] = created
+                    return created
+                }()
+            node.texture = itemTexture(for: item.catalogID)
+            node.position = Self.point(forTile: item.position)
+            node.zRotation = -CGFloat(item.rotation) * .pi / 2
+        }
+        for (id, node) in itemNodes where !seen.contains(id) {
+            node.removeFromParent()
+            itemNodes.removeValue(forKey: id)
+        }
+    }
+
+    /// Decorate mode: highlight the zone and route clicks to the callbacks.
+    func setEditing(zone: WorldMap.Zone?) {
+        editingEnabled = zone != nil
+        editHighlight?.removeFromParent()
+        editHighlight = nil
+        guard let zone else { return }
+        let rect = CGRect(
+            x: zone.x * Double(Self.tilePoints), y: -(zone.y + zone.height) * Double(Self.tilePoints),
+            width: zone.width * Double(Self.tilePoints),
+            height: zone.height * Double(Self.tilePoints))
+        let highlight = SKShapeNode(rect: rect, cornerRadius: 4)
+        highlight.strokeColor = NSColor(srgbRed: 0.4, green: 0.9, blue: 0.6, alpha: 0.9)
+        highlight.lineWidth = 2
+        highlight.fillColor = NSColor(srgbRed: 0.4, green: 0.9, blue: 0.6, alpha: 0.12)
+        highlight.zPosition = 3
+        addChild(highlight)
+        editHighlight = highlight
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard editingEnabled else { return }
+        let point = event.location(in: self)
+        for (id, node) in itemNodes where node.frame.insetBy(dx: -4, dy: -4).contains(point) {
+            onItemPicked?(id)
+            return
+        }
+        onTilePicked?(Vec2(x: point.x / Self.tilePoints, y: -point.y / Self.tilePoints))
+    }
+
+    private func itemTexture(for catalogID: UInt16) -> SKTexture? {
+        guard let itemsTexture, let item = ItemCatalog.item(id: catalogID) else { return nil }
+        let columns = ItemCatalog.spriteColumns
+        let rows = 5
+        let column = item.spriteIndex % columns
+        let row = item.spriteIndex / columns
+        let rect = CGRect(
+            x: CGFloat(column) / CGFloat(columns), y: 1 - CGFloat(row + 1) / CGFloat(rows),
+            width: 1 / CGFloat(columns), height: 1 / CGFloat(rows))
+        return SKTexture(rect: rect, in: itemsTexture)
     }
 
     func applyRoster(_ roster: [RosterEntry]) {
@@ -139,6 +214,7 @@ final class WorldScene: SKScene {
             position = MovementSim.step(
                 position: position, input: currentInput, dt: dt, collision: map.collision)
             localPosition = position
+            localPositionSnapshot = position
             localFacing = Facing.from(input: currentInput, previous: localFacing)
 
             let node = localNode ?? makeAvatarNode(name: localDisplayName, preset: localPreset)
@@ -202,6 +278,7 @@ final class WorldScene: SKScene {
         }
         tilesTexture = texture("tiles")
         avatarsTexture = texture("avatars")
+        itemsTexture = texture("items")
     }
 
     private func buildTileNodes() {

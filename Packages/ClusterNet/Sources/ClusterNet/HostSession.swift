@@ -11,6 +11,8 @@ public enum HostSessionEvent: Sendable {
     case worldSnapshot(WorldSnapshot)
     /// A speaker audible from the host's position — feed the host's playback.
     case voiceReceived(speakerID: UInt64, seq: UInt32, opus: Data)
+    /// Claims or placements changed (ADR 0005) — includes the initial load.
+    case deskStateChanged(DeskState)
     case ended(reason: String)
 }
 
@@ -31,7 +33,9 @@ public actor HostSession {
     private let map: WorldMap
     /// Session-wide policy from Settings → Connection (ADR 0002).
     private let allowUDP: Bool
+    private let deskStore: any DeskStore
     private let sessionKey = HostSessionKey()
+    private var deskState = DeskState()
 
     private var control: FrameConnection?
     private var sessionCode: String?
@@ -76,7 +80,8 @@ public actor HostSession {
         hostAvatarPreset: String,
         map: WorldMap,
         allowUDP: Bool,
-        initialStatus: PlayerStatus = .available
+        initialStatus: PlayerStatus = .available,
+        deskStore: any DeskStore = InMemoryDeskStore()
     ) {
         self.endpoint = endpoint
         self.identity = identity
@@ -87,6 +92,7 @@ public actor HostSession {
         self.map = map
         self.allowUDP = allowUDP
         self.initialStatus = initialStatus
+        self.deskStore = deskStore
         (events, eventsContinuation) = AsyncStream.makeStream()
     }
 
@@ -113,7 +119,9 @@ public actor HostSession {
         world[identity.playerID] = WorldPlayer(position: spawnPosition())
         statuses[identity.playerID] = initialStatus
         lastActivityAt[identity.playerID] = .now
+        deskState = (try? deskStore.loadDeskState()) ?? DeskState()
         eventsContinuation.yield(.registered(code: code))
+        eventsContinuation.yield(.deskStateChanged(deskState))
         eventsContinuation.yield(.rosterChanged(currentRoster()))
         startPings(on: control)
         startTickLoop()
@@ -400,6 +408,7 @@ public actor HostSession {
                     spaceName: spaceName, mapVersion: map.contentHash,
                     hostAllowsUDP: allowUDP, roster: currentRoster()),
                 to: playerID)
+            try await sendMessage(.deskState(deskState), to: playerID)
             await broadcastRoster()
 
             // Stay on the line for tunnel traffic until they leave or drop.
@@ -429,6 +438,9 @@ public actor HostSession {
                     lastActivityAt[playerID] = .now
                     try? directory.saveStatus(id: playerID, status: status)
                     await broadcastRoster()
+                case .deskCommand(let command):
+                    lastActivityAt[playerID] = .now
+                    await handleDeskCommand(command, from: playerID)
                 default:
                     break
                 }
@@ -502,6 +514,82 @@ public actor HostSession {
                 atDistance: speakerPosition.distance(to: hostPosition))
         {
             eventsContinuation.yield(.voiceReceived(speakerID: speakerWireID, seq: seq, opus: opus))
+        }
+    }
+
+    // MARK: Desks (ADR 0005: the host validates, persists, rebroadcasts)
+
+    /// The host's own edits enter the same gate as everyone else's.
+    public func performDeskCommand(_ command: DeskCommand) async {
+        await handleDeskCommand(command, from: identity.playerID)
+    }
+
+    private func handleDeskCommand(_ command: DeskCommand, from playerID: String) async {
+        switch command {
+        case .claim(let zone):
+            guard DeskRules.deskZone(named: zone, in: map) != nil,
+                deskState.owner(of: zone) == nil,
+                deskState.deskOwned(by: playerID) == nil,
+                (try? deskStore.setClaim(zone: zone, ownerID: playerID)) != nil
+            else { return }
+            deskState.claims.removeAll { $0.zone == zone }
+            deskState.claims.append(DeskClaim(zone: zone, ownerID: playerID))
+
+        case .release(let zone):
+            guard deskState.owner(of: zone) == playerID,
+                (try? deskStore.setClaim(zone: zone, ownerID: "")) != nil
+            else { return }
+            // A released desk surrenders its decorations (ADR 0005).
+            try? deskStore.clearItems(zone: zone)
+            deskState.claims.removeAll { $0.zone == zone }
+            deskState.items.removeAll { $0.zone == zone }
+
+        case .place(let zone, let catalogID, let x, let y, let rotation):
+            guard deskState.owner(of: zone) == playerID,
+                ItemCatalog.item(id: catalogID) != nil,
+                let zoneRect = DeskRules.deskZone(named: zone, in: map),
+                deskState.items(in: zone).count < DeskRules.maxItemsPerDesk
+            else { return }
+            let snapped = DeskRules.snap(x: Double(x), y: Double(y))
+            guard DeskRules.isInside(x: snapped.x, y: snapped.y, zone: zoneRect),
+                let id = try? deskStore.insertItem(
+                    zone: zone, catalogID: catalogID,
+                    x: Float(snapped.x), y: Float(snapped.y), rotation: rotation % 4)
+            else { return }
+            deskState.items.append(
+                PlacedItem(
+                    id: id, zone: zone, catalogID: catalogID,
+                    x: Float(snapped.x), y: Float(snapped.y), rotation: rotation % 4))
+
+        case .remove(let itemID):
+            guard let item = deskState.items.first(where: { $0.id == itemID }),
+                deskState.owner(of: item.zone) == playerID,
+                (try? deskStore.removeItem(id: itemID)) != nil
+            else { return }
+            deskState.items.removeAll { $0.id == itemID }
+
+        case .move(let itemID, let x, let y, let rotation):
+            guard let index = deskState.items.firstIndex(where: { $0.id == itemID }),
+                deskState.owner(of: deskState.items[index].zone) == playerID,
+                let zoneRect = DeskRules.deskZone(named: deskState.items[index].zone, in: map)
+            else { return }
+            let snapped = DeskRules.snap(x: Double(x), y: Double(y))
+            guard DeskRules.isInside(x: snapped.x, y: snapped.y, zone: zoneRect),
+                (try? deskStore.moveItem(
+                    id: itemID, x: Float(snapped.x), y: Float(snapped.y), rotation: rotation % 4))
+                    != nil
+            else { return }
+            deskState.items[index].x = Float(snapped.x)
+            deskState.items[index].y = Float(snapped.y)
+            deskState.items[index].rotation = rotation % 4
+        }
+        await broadcastDeskState()
+    }
+
+    private func broadcastDeskState() async {
+        eventsContinuation.yield(.deskStateChanged(deskState))
+        for playerID in members.keys {
+            try? await sendMessage(.deskState(deskState), to: playerID)
         }
     }
 

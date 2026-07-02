@@ -17,6 +17,7 @@ struct WorldView: View {
 
     @State private var scene: WorldScene?
     @State private var keys = KeyState()
+    @State private var deskEdit = DeskEditModel()
 
     @State private var showRoster = true
 
@@ -37,6 +38,9 @@ struct WorldView: View {
                     .padding(.trailing, 12)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
+            deskPanel
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .padding(12)
         }
         .onAppear(perform: enterWorld)
         .onDisappear(perform: leaveWorldUI)
@@ -54,6 +58,115 @@ struct WorldView: View {
         case .host: model.hostLobby.roster
         case .join: model.joinLobby.roster
         }
+    }
+
+    private var deskState: DeskState {
+        switch mode {
+        case .host: model.hostLobby.deskState
+        case .join: model.joinLobby.deskState
+        }
+    }
+
+    private func performDesk(_ command: DeskCommand) {
+        switch mode {
+        case .host: model.hostLobby.performDesk(command)
+        case .join: model.joinLobby.performDesk(command)
+        }
+    }
+
+    /// Bottom-left desk panel: claim/release where you stand, and the item
+    /// palette while decorating (ADR 0005). The zone check re-evaluates on a
+    /// short cadence as you walk.
+    @ViewBuilder
+    private var deskPanel: some View {
+        TimelineView(.periodic(from: .now, by: 0.4)) { _ in
+            let myID = model.identity?.playerID ?? ""
+            let standingZone = scene?.localPositionSnapshot.flatMap { position in
+                model.worldMap?.zones.first {
+                    $0.type == "desk"
+                        && DeskRules.isInside(x: position.x, y: position.y, zone: $0)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                if let editing = deskEdit.editingZone {
+                    editingPalette(zone: editing)
+                } else if let zone = standingZone {
+                    let owner = deskState.owner(of: zone.name)
+                    HStack(spacing: 8) {
+                        Image(systemName: "tablecells")
+                        Text(deskLabel(zone: zone.name, owner: owner, myID: myID))
+                        if owner == nil && deskState.deskOwned(by: myID) == nil {
+                            Button("Claim") { performDesk(.claim(zone: zone.name)) }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                        } else if owner == myID {
+                            Button("Decorate") { beginEditing(zone: zone) }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            Button("Release", role: .destructive) {
+                                performDesk(.release(zone: zone.name))
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                    .hudChip()
+                }
+            }
+        }
+        .foregroundStyle(.white)
+    }
+
+    private func deskLabel(zone: String, owner: String?, myID: String) -> String {
+        guard let owner else { return "\(zone) — unclaimed" }
+        if owner == myID { return "\(zone) — yours" }
+        let name = roster.first { $0.playerID == owner }?.displayName ?? "someone"
+        return "\(zone) — \(name)'s"
+    }
+
+    private func beginEditing(zone: WorldMap.Zone) {
+        deskEdit.editingZone = zone.name
+        scene?.setEditing(zone: zone)
+    }
+
+    private func endEditing() {
+        deskEdit.editingZone = nil
+        scene?.setEditing(zone: nil)
+    }
+
+    @ViewBuilder
+    private func editingPalette(zone: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Decorating \(zone)")
+                    .font(.headline)
+                Text("\(deskState.items(in: zone).count)/\(DeskRules.maxItemsPerDesk)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Done") { endEditing() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+            Text("Click inside the highlighted desk to place · click an item to remove it")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(CatalogItem.Category.allCases, id: \.self) { category in
+                        ForEach(ItemCatalog.all.filter { $0.category == category }) { item in
+                            Button(item.name) { deskEdit.selectedCatalogID = item.id }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .tint(deskEdit.selectedCatalogID == item.id ? .green : .gray)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: 520)
+        }
+        .padding(12)
+        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func changeStatus(_ status: PlayerStatus) {
@@ -274,6 +387,25 @@ struct WorldView: View {
                 localWireID: wireID, pushToTalk: model.pushToTalk, status: model.myStatus)
         }
         scene = newScene
+        let deskEdit = deskEdit
+        let lobbyPerform: (DeskCommand) -> Void = { [weak model] command in
+            guard let model else { return }
+            switch mode {
+            case .host: model.hostLobby.performDesk(command)
+            case .join: model.joinLobby.performDesk(command)
+            }
+        }
+        newScene.onTilePicked = { tile in
+            guard let zone = deskEdit.editingZone else { return }
+            lobbyPerform(
+                .place(
+                    zone: zone, catalogID: deskEdit.selectedCatalogID,
+                    x: Float(tile.x), y: Float(tile.y), rotation: 0))
+        }
+        newScene.onItemPicked = { itemID in
+            guard deskEdit.editingZone != nil else { return }
+            lobbyPerform(.remove(itemID: itemID))
+        }
         keys.install(
             onChange: { [weak newScene] input in newScene?.setInput(input) },
             onPushToTalk: { held in voice.pttHeld = held }
@@ -281,6 +413,7 @@ struct WorldView: View {
     }
 
     private func leaveWorldUI() {
+        endEditing()
         keys.remove()
         voice.stop()
         switch mode {
@@ -460,4 +593,12 @@ final class KeyState {
         }
         return MoveInput(dirX: Int8(clamping: dx), dirY: Int8(clamping: dy))
     }
+}
+
+/// Editing state shared between the HUD and the scene's click callbacks.
+@MainActor
+@Observable
+final class DeskEditModel {
+    var editingZone: String?
+    var selectedCatalogID: UInt16 = 1
 }

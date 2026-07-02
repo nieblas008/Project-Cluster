@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.7.0 — Phase 5: Desks & personalization (2026-07-02)
+
+- Claim a desk: stand in any of the mansion's 16 desk zones and the desk panel
+  offers Claim (one desk per person), Decorate, or Release — a released desk
+  surrenders its decorations (ADR 0005).
+- Item catalog: 20 items across plants, tech, comfort, fun, and trophies —
+  original generated sprites (items.png), zero license risk. The trophy shelf
+  awaits Phase 6's kart winners.
+- Decorate mode: the desk highlights in the world; click inside to place the
+  selected item (snapped to half-tiles), click an item to remove it, 8 items
+  max per desk.
+- Host-authoritative and persistent: every edit is validated on the host (your
+  desk only, inside its bounds, valid item), stored in SQLite (migration v2),
+  and the full desk state broadcasts live to everyone — placements survive
+  restarts and appear the moment someone joins.
+- Wire version 4 (deskState/deskCommand messages).
+- The end-to-end smoke now also claims a desk, places a lava lamp, and asserts
+  both sides converge — on UDP and forced TCP.
+
 ## 0.6.0 — Phase 4: Status & presence (2026-06-13)
 
 - User-set status — Available / Focus / Do Not Disturb — set from an in-world
