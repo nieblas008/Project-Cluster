@@ -6,7 +6,23 @@ chat, personalizes desks, and races go-karts. One member **hosts** the session o
 the world's data lives there — and everyone else **joins with a short code** through a tiny
 stateless relay.
 
-**The full design and phase-by-phase roadmap live in [docs/PLAN.md](docs/PLAN.md).**
+**Status: v0.1.0-alpha — the full core scope is built and CI-verified**: identity,
+host & join by code, the walkable mansion, proximity voice, status & presence,
+personal desks, and go-karts with a lap leaderboard. The design, roadmap, and
+backlog live in [docs/PLAN.md](docs/PLAN.md).
+
+## Controls
+
+| Key | Action |
+|---|---|
+| WASD / arrows | Walk (steer + throttle in a kart) |
+| E | Mount / dismount a kart |
+| Space | Handbrake — drift |
+| H | Horn 📯 |
+| ⌥ Option (hold) | Push-to-talk (when enabled in Settings) |
+| ⌃1 / ⌃2 / ⌃3 | Status: Available / Focus / Do Not Disturb |
+| Click (decorate mode) | Place / remove desk items |
+| Right-click a roster row | Kick / Block (host only) |
 
 ## Layout
 

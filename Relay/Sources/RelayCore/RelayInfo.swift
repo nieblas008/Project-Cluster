@@ -1,3 +1,4 @@
 public enum RelayInfo {
-    public static let version = "0.2.0"
+    /// Kept in step with the app release (CHANGELOG / git tag).
+    public static let version = "0.1.0"
 }

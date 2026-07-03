@@ -175,10 +175,13 @@ public actor HostSession {
     /// Remove a member; optionally blocklist their identity (Phase 7). A
     /// blocked identity is refused at the door on every future knock.
     public func kick(playerID: String, block: Bool) async {
-        guard playerID != identity.playerID, members[playerID] != nil else { return }
+        guard playerID != identity.playerID else { return }
         if block {
+            // Blocking must work whether or not they're currently connected —
+            // the point is refusing their NEXT knock (v0.1 audit fix).
             try? directory.setBlocked(id: playerID, blocked: true)
         }
+        guard members[playerID] != nil else { return }
         try? await sendMessage(
             .denied(
                 reason: block

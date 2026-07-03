@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.0-alpha — First assembled alpha (2026-07-02)
+
+The first tagged build: all seven phases of the core scope (the 0.1–0.9
+development milestones below), plus the pre-alpha audit:
+
+- **Fixed:** blocking an offline player silently did nothing — the blocklist
+  now persists regardless of connection state, and chaos drill 5 proves a
+  blocked identity is refused on rejoin.
+- **Fixed:** the menu bar's "Open Window" couldn't reopen a closed window.
+- Voice concealment stats now surface in the connection-quality tooltip.
+- Version alignment (app 0.1.0, relay banner), asset license manifest
+  completed (items/karts sprites + audio), README gained the controls table,
+  plan status updated.
+
+Known alpha edges (documented in docs/runbooks/incident.md): no unblock UI,
+no desk reassignment UI, identity import applies to new sessions only.
+
 ## 0.9.0 — Phase 7: The rock-solid pass (2026-07-02)
 
 - Chaos drills, automated and in CI: a member's wifi drop removes them cleanly

@@ -4,10 +4,10 @@ import ClusterProtocol
 import ClusterVoice
 import Foundation
 
-/// End-to-end smoke, Phases 1–3: join by code through a live relay, converge
-/// rosters, WALK (host-validated movement), then TALK (synthetic Opus frames
-/// through the host's proximity fan-out, decoded on arrival). Runs against
-/// both transports via CLUSTER_FORCE_TCP.
+/// End-to-end smoke of the whole product: join by code through a live relay,
+/// walk (host-validated), talk (Opus through the proximity fan-out), set
+/// status, claim + decorate a desk, and drive a kart — on both transports via
+/// CLUSTER_FORCE_TCP. CLUSTER_CHAOS=1 runs the failure drills instead.
 @main
 struct Smoke {
     static func main() async {
@@ -42,7 +42,7 @@ struct Smoke {
         if outcome {
             print(
                 chaos
-                    ? "SMOKE OK — chaos drills: wifi drop, host crash, rehost, and kick all clean"
+                    ? "SMOKE OK — chaos drills: wifi drop, host crash, rehost, kick, and block all clean"
                     : "SMOKE OK — roster, walk, voice, status, desks, and karts all good, "
                         + "transport=\(forceTCP ? "tcp" : "udp")")
             exit(0)
@@ -350,18 +350,21 @@ struct Smoke {
             private var _joiner3Welcomed = false
             private var _joiner3DeskIntact = false
             private var _joiner3Kicked = false
+            private var _joiner4Blocked = false
             var host1Roster: Int { lock.withLock { _host1Roster } }
             var kartFree: Bool { lock.withLock { _kartFree } }
             var joiner2Ended: Bool { lock.withLock { _joiner2Ended } }
             var joiner3Welcomed: Bool { lock.withLock { _joiner3Welcomed } }
             var joiner3DeskIntact: Bool { lock.withLock { _joiner3DeskIntact } }
             var joiner3Kicked: Bool { lock.withLock { _joiner3Kicked } }
+            var joiner4Blocked: Bool { lock.withLock { _joiner4Blocked } }
             func setRoster(_ n: Int) { lock.withLock { _host1Roster = n } }
             func setKartFree(_ v: Bool) { lock.withLock { _kartFree = v } }
             func setJoiner2Ended() { lock.withLock { _joiner2Ended = true } }
             func setJoiner3Welcomed() { lock.withLock { _joiner3Welcomed = true } }
             func setJoiner3DeskIntact() { lock.withLock { _joiner3DeskIntact = true } }
             func setJoiner3Kicked() { lock.withLock { _joiner3Kicked = true } }
+            func setJoiner4Blocked() { lock.withLock { _joiner4Blocked = true } }
         }
 
         do {
@@ -503,10 +506,28 @@ struct Smoke {
             let kickOK = await waitUntil(timeout: 10) { chaos.joiner3Kicked }
             print("chaos: drill 4 (kick) — kicked with reason: \(kickOK)")
 
+            // ---- Drill 5: block while OFFLINE (the v0.1 audit fix), then the
+            // blocked identity tries to come back and is refused at the door.
+            await host2.kick(playerID: joinerIdentity.playerID, block: true)
+            let joiner4 = makeJoiner()
+            await joiner4.start(code: code2)
+            let joiner4Consumer = Task {
+                for await event in joiner4.events {
+                    if case .denied(let reason) = event,
+                        reason == "You are blocked from this space."
+                    {
+                        chaos.setJoiner4Blocked()
+                    }
+                }
+            }
+            let blockOK = await waitUntil(timeout: 10) { chaos.joiner4Blocked }
+            print("chaos: drill 5 (offline block) — rejoin refused: \(blockOK)")
+
             host2Consumer.cancel()
             joiner3Consumer.cancel()
+            joiner4Consumer.cancel()
             await host2.stop()
-            return dropOK && crashOK && rehostOK && kickOK
+            return dropOK && crashOK && rehostOK && kickOK && blockOK
         } catch {
             print("chaos: error \(error)")
             return false

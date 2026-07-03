@@ -299,8 +299,16 @@ struct WorldView: View {
                     .frame(width: 3, height: CGFloat(4 + bar * 3))
             }
         }
-        .help("Connection: \(q.label)")
+        .help(qualityHelp(q))
         .hudChip()
+    }
+
+    private func qualityHelp(_ q: ConnectionQuality) -> String {
+        let stats = voice.stats
+        guard stats.concealed > 0 else { return "Connection: \(q.label)" }
+        return String(
+            format: "Connection: %@ · %.1f%%%% of voice frames concealed",
+            q.label, stats.concealmentRate * 100)
     }
 
     private func qualityColor(_ q: ConnectionQuality) -> Color {

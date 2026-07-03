@@ -6,7 +6,8 @@
 > and everyone else joins with a short code, Among Us style, **through a tiny relay server in the
 > cloud** so nobody ever needs port forwarding.
 
-**Status:** Planning complete — execution happens one phase per prompt (see §14 and §17).
+**Status:** **v0.1.0-alpha — all seven phases of the core scope are shipped.**
+Development continues from the backlog (§15), one item per prompt (§17).
 **Last updated:** 2026-06-10 (v4 — relay-based connectivity replaces direct connections)
 **Owner:** Ricardo Nieblas
 
