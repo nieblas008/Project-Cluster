@@ -8,8 +8,11 @@ stateless relay.
 
 **Status: v0.1.0-alpha — the full core scope is built and CI-verified**: identity,
 host & join by code, the walkable mansion, proximity voice, status & presence,
-personal desks, and go-karts with a lap leaderboard. The design, roadmap, and
-backlog live in [docs/PLAN.md](docs/PLAN.md).
+personal desks, and go-karts with a lap leaderboard.
+
+- **What to do next → [docs/ROADMAP.md](docs/ROADMAP.md)** (start here)
+- Design & architecture → [docs/PLAN.md](docs/PLAN.md)
+- Decisions → [docs/adr/](docs/adr/) · Operations → [docs/runbooks/](docs/runbooks/)
 
 ## Controls
 

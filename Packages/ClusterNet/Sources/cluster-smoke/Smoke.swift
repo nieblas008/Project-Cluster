@@ -43,7 +43,8 @@ struct Smoke {
             print(
                 chaos
                     ? "SMOKE OK — chaos drills: wifi drop, host crash, rehost, kick, and block all clean"
-                    : "SMOKE OK — roster, walk, voice, status, desks, and karts all good, "
+                    : "SMOKE OK — roster, walk, voice, status, desks, rotate, and karts "
+                        + "all good, "
                         + "transport=\(forceTCP ? "tcp" : "udp")")
             exit(0)
         } else {
@@ -61,6 +62,8 @@ struct Smoke {
         private var _joinerStatusOnHost: PlayerStatus?
         private var _deskOnHost = false
         private var _deskOnJoiner = false
+        private var _deskItemID: UInt32?
+        private var _deskItemRotation: UInt8?
         private var _kartMounted = false
         private var _kartMoved = false
         private var _kartFreed = false
@@ -73,6 +76,8 @@ struct Smoke {
         var joinerStatusOnHost: PlayerStatus? { lock.withLock { _joinerStatusOnHost } }
         var deskOnHost: Bool { lock.withLock { _deskOnHost } }
         var deskOnJoiner: Bool { lock.withLock { _deskOnJoiner } }
+        var deskItemID: UInt32? { lock.withLock { _deskItemID } }
+        var deskItemRotation: UInt8? { lock.withLock { _deskItemRotation } }
         var kartMounted: Bool { lock.withLock { _kartMounted } }
         var kartMoved: Bool { lock.withLock { _kartMoved } }
         var kartFreed: Bool { lock.withLock { _kartFreed } }
@@ -85,6 +90,12 @@ struct Smoke {
         func setJoinerStatusOnHost(_ s: PlayerStatus) { lock.withLock { _joinerStatusOnHost = s } }
         func markDeskOnHost() { lock.withLock { _deskOnHost = true } }
         func markDeskOnJoiner() { lock.withLock { _deskOnJoiner = true } }
+        func setDeskItem(id: UInt32?, rotation: UInt8?) {
+            lock.withLock {
+                _deskItemID = id
+                _deskItemRotation = rotation
+            }
+        }
         func markKartMounted() { lock.withLock { _kartMounted = true } }
         func markKartMoved() { lock.withLock { _kartMoved = true } }
         func markKartFreed() { lock.withLock { _kartFreed = true } }
@@ -180,6 +191,8 @@ struct Smoke {
                         {
                             results.markDeskOnHost()
                         }
+                        let placed = state.items(in: "desk-01").first
+                        results.setDeskItem(id: placed?.id, rotation: placed?.rotation)
                     case .raceStateChanged(let race):
                         if race.kart(ownedBy: joinerWireID) != nil {
                             results.markKartMounted()
@@ -289,6 +302,15 @@ struct Smoke {
                 "smoke: desk claimed+decorated — host sees it: \(results.deskOnHost), "
                     + "joiner sees it: \(results.deskOnJoiner)")
 
+            // Phase: rotate — the desk editor's click-to-rotate path (.move).
+            var rotateOK = false
+            if await waitUntil({ results.deskItemID != nil }), let placed = results.deskItemID {
+                await joiner.sendDeskCommand(
+                    .move(itemID: placed, x: 5.5, y: 4.5, rotation: 3))
+                rotateOK = await waitUntil { results.deskItemRotation == 3 }
+            }
+            print("smoke: desk item rotated and persisted host-side: \(rotateOK)")
+
             // Phase: karts — mount, drive east at kart speed, dismount.
             await joiner.sendRaceCommand(.mount(kartID: "kart-01"))
             let mountOK = await waitUntil { results.kartMounted }
@@ -328,8 +350,8 @@ struct Smoke {
                 print("smoke: transport mismatch (forceTCP=\(forceTCP))")
                 return false
             }
-            return voiceOK && results.walked && statusOK && deskOK && mountOK && kartMoveOK
-                && kartFreeOK
+            return voiceOK && results.walked && statusOK && deskOK && rotateOK && mountOK
+                && kartMoveOK && kartFreeOK
         } catch {
             print("smoke: error \(error)")
             return false

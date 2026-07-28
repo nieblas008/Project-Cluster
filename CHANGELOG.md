@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **Desk items can now be rotated.** The wire protocol, host validation, and
+  SQLite persistence for moving/rotating a placed item all existed and were
+  tested, but no UI ever sent the command — every item was stuck at rotation 0.
+  In decorate mode: click an item to turn it a quarter turn, ⌥-click to remove.
+  The end-to-end smoke now covers the rotate path on both transports.
+- Removed dead `VoiceEngine.removeSpeaker` (superseded by `retainSpeakers` in
+  the Phase 3 audit; zero call sites since).
+- ADR 0007 (emotes + minimap) corrected to **proposed** — it described designs
+  that aren't built yet while claiming "accepted".
+- Added [docs/ROADMAP.md](docs/ROADMAP.md): where the project stands and what
+  to do next, in order.
+
 ## v0.1.0-alpha — First assembled alpha (2026-07-02)
 
 The first tagged build: all seven phases of the core scope (the 0.1–0.9

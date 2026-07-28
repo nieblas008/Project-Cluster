@@ -167,9 +167,11 @@ struct WorldView: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
             }
-            Text("Click inside the highlighted desk to place · click an item to remove it")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            Text(
+                "Click the desk to place · click an item to rotate it · ⌥-click to remove"
+            )
+            .font(.caption2)
+            .foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(CatalogItem.Category.allCases, id: \.self) { category in
@@ -496,9 +498,20 @@ struct WorldView: View {
                     zone: zone, catalogID: deskEdit.selectedCatalogID,
                     x: Float(tile.x), y: Float(tile.y), rotation: 0))
         }
-        newScene.onItemPicked = { itemID in
-            guard deskEdit.editingZone != nil else { return }
-            lobbyPerform(.remove(itemID: itemID))
+        newScene.onItemPicked = { [weak model] itemID, wantsRemove in
+            guard deskEdit.editingZone != nil, let model else { return }
+            if wantsRemove {
+                lobbyPerform(.remove(itemID: itemID))
+                return
+            }
+            // Plain click rotates a quarter turn — the host validates and
+            // persists it through the same path as placing (ADR 0005).
+            let desks = mode == .host ? model.hostLobby.deskState : model.joinLobby.deskState
+            guard let item = desks.items.first(where: { $0.id == itemID }) else { return }
+            lobbyPerform(
+                .move(
+                    itemID: itemID, x: item.x, y: item.y,
+                    rotation: (item.rotation + 1) % 4))
         }
         keys.install(
             onChange: { [weak newScene] input in newScene?.setInput(input) },

@@ -62,7 +62,8 @@ final class WorldScene: SKScene {
     private(set) var localPositionSnapshot: Vec2?
     /// Set while the decorate panel is open; enables click placement/removal.
     var onTilePicked: ((Vec2) -> Void)?
-    var onItemPicked: ((UInt32) -> Void)?
+    /// (itemID, wantsRemove) — plain click rotates, ⌥-click removes.
+    var onItemPicked: ((UInt32, Bool) -> Void)?
     private var editingEnabled = false
 
     private var interpolators: [UInt64: RemotePlayerInterpolator] = [:]
@@ -155,8 +156,9 @@ final class WorldScene: SKScene {
     override func mouseDown(with event: NSEvent) {
         guard editingEnabled else { return }
         let point = event.location(in: self)
+        let wantsRemove = event.modifierFlags.contains(.option)
         for (id, node) in itemNodes where node.frame.insetBy(dx: -4, dy: -4).contains(point) {
-            onItemPicked?(id)
+            onItemPicked?(id, wantsRemove)
             return
         }
         onTilePicked?(Vec2(x: point.x / Self.tilePoints, y: -point.y / Self.tilePoints))
